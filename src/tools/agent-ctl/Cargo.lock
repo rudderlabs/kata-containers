@@ -2106,7 +2106,7 @@ dependencies = [
  "qapi",
  "qapi-qmp",
  "qapi-spec",
- "rand 0.8.5",
+ "rand 0.9.2",
  "rust-ini",
  "safe-path 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "seccompiler",
@@ -2476,7 +2476,7 @@ dependencies = [
  "oci-spec",
  "protobuf",
  "protocols",
- "rand 0.8.5",
+ "rand 0.9.2",
  "safe-path 0.1.0",
  "serde",
  "serde_json",
@@ -5118,7 +5118,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "kata-types",
- "rand 0.8.5",
+ "rand 0.9.2",
 ]
 
 [[package]]
