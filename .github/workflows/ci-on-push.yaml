@@ -20,16 +20,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  skipper:
-    if: ${{ contains(github.event.pull_request.labels.*.name, 'ok-to-test') }}
-    uses: ./.github/workflows/gatekeeper-skipper.yaml
-    with:
-      commit-hash: ${{ github.event.pull_request.head.sha }}
-      target-branch: ${{ github.event.pull_request.base.ref }}
-
   kata-containers-ci-on-push:
-    needs: skipper
-    if: ${{ needs.skipper.outputs.skip_build != 'yes' }}
+    if: ${{ contains(github.event.pull_request.labels.*.name, 'ok-to-test') }}
     permissions:
       contents: read
       packages: write
