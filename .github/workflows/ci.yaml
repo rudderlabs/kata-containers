@@ -46,7 +46,7 @@ jobs:
     with:
       tarball-suffix: -${{ inputs.tag }}
       registry: ecr
-      repo: kata-containers/kata-deploy-ci
+      repo: rudderstack/kata-deploy-ci
       tag: ${{ inputs.tag }}-amd64
       commit-hash: ${{ inputs.commit-hash }}
       target-branch: ${{ inputs.target-branch }}
@@ -77,7 +77,7 @@ jobs:
     with:
       tarball-suffix: -${{ inputs.tag }}
       registry: ecr
-      repo: kata-containers/kata-deploy-ci
+      repo: rudderstack/kata-deploy-ci
       tag: ${{ inputs.tag }}-arm64
       commit-hash: ${{ inputs.commit-hash }}
       target-branch: ${{ inputs.target-branch }}
