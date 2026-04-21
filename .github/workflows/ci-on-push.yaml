@@ -26,4 +26,3 @@ jobs:
       target-branch: ${{ github.event.pull_request.base.ref }}
     secrets:
       KBUILD_SIGN_PIN: ${{ secrets.KBUILD_SIGN_PIN }}
-      QUAY_DEPLOYER_PASSWORD: ${{ secrets.QUAY_DEPLOYER_PASSWORD }}

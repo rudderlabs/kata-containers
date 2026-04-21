@@ -16,8 +16,6 @@ on:
         type: string
         default: ""
     secrets:
-      QUAY_DEPLOYER_PASSWORD:
-        required: false
       KBUILD_SIGN_PIN:
         required: false
 
@@ -78,12 +76,10 @@ jobs:
     uses: ./.github/workflows/publish-kata-deploy-payload.yaml
     with:
       tarball-suffix: -${{ inputs.tag }}
-      registry: ghcr.io
-      repo: ${{ github.repository_owner }}/kata-deploy-ci
+      registry: ecr
+      repo: kata-containers/kata-deploy-ci
       tag: ${{ inputs.tag }}-arm64
       commit-hash: ${{ inputs.commit-hash }}
       target-branch: ${{ inputs.target-branch }}
       runner: ubuntu-24.04-arm
       arch: arm64
-    secrets:
-      QUAY_DEPLOYER_PASSWORD: ${{ secrets.QUAY_DEPLOYER_PASSWORD }}
