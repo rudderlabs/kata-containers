@@ -23,7 +23,7 @@ impl RandomBytes {
 impl fmt::LowerHex for RandomBytes {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         for byte in &self.bytes {
-            write!(f, "{byte:x}")?;
+            write!(f, "{:x}", byte)?;
         }
         Ok(())
     }
@@ -32,7 +32,7 @@ impl fmt::LowerHex for RandomBytes {
 impl fmt::UpperHex for RandomBytes {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         for byte in &self.bytes {
-            write!(f, "{byte:X}")?;
+            write!(f, "{:X}", byte)?;
         }
         Ok(())
     }
@@ -48,11 +48,11 @@ mod tests {
         assert_eq!(b.bytes.len(), 16);
 
         // check lower hex
-        let lower_hex = format!("{b:x}");
+        let lower_hex = format!("{:x}", b);
         assert_eq!(lower_hex, lower_hex.to_lowercase());
 
         // check upper hex
-        let upper_hex = format!("{b:X}");
+        let upper_hex = format!("{:X}", b);
         assert_eq!(upper_hex, upper_hex.to_uppercase());
 
         // check new random bytes

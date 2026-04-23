@@ -12,7 +12,7 @@ use dbs_utils::epoll_manager::{EpollManager, EventOps, Events, MutEventSubscribe
 use dbs_utils::net::MacAddr;
 use log::{debug, error, info, trace, warn};
 use vhost_rs::vhost_user::{
-    Error as VhostUserError, Frontend, VhostUserProtocolFeatures, VhostUserVirtioFeatures,
+    Error as VhostUserError, Master, VhostUserProtocolFeatures, VhostUserVirtioFeatures,
 };
 use vhost_rs::Error as VhostError;
 use virtio_bindings::bindings::virtio_net::{
@@ -59,14 +59,17 @@ struct VhostUserNetDevice {
 
 impl VhostUserNetDevice {
     fn new(
-        master: Frontend,
+        master: Master,
         mut avail_features: u64,
         listener: Listener,
         guest_mac: Option<&MacAddr>,
         queue_sizes: Arc<Vec<u16>>,
         epoll_mgr: EpollManager,
     ) -> VirtioResult<Self> {
-        info!("{NET_DRIVER_NAME}: slave support features 0x{avail_features:x}");
+        info!(
+            "{}: slave support features 0x{:x}",
+            NET_DRIVER_NAME, avail_features
+        );
 
         avail_features |= (1 << VIRTIO_NET_F_MTU) as u64;
         // All these features depends on availability of control channel
@@ -114,7 +117,10 @@ impl VhostUserNetDevice {
         queue_sizes: Arc<Vec<u16>>,
         epoll_mgr: EpollManager,
     ) -> VirtioResult<Self> {
-        info!("{NET_DRIVER_NAME}: creating Unix Domain Socket listener...");
+        info!(
+            "{}: creating Unix Domain Socket listener...",
+            NET_DRIVER_NAME
+        );
 
         let listener = Listener::new(
             NET_DRIVER_NAME.to_string(),
@@ -123,9 +129,12 @@ impl VhostUserNetDevice {
             LISTENER_SLOT,
         )?;
 
-        info!("{NET_DRIVER_NAME}: waiting for incoming connection from the slave...");
+        info!(
+            "{}: waiting for incoming connection from the slave...",
+            NET_DRIVER_NAME
+        );
         let (master, avail_features) = listener.accept()?;
-        info!("{NET_DRIVER_NAME}: connection to slave is ready.");
+        info!("{}: connection to slave is ready.", NET_DRIVER_NAME);
 
         Self::new(
             master,
@@ -189,7 +198,7 @@ impl VhostUserNetDevice {
             // recreate it again.
             let (master, avail_features) = self.listener.accept()?;
             if !avail_features & self.device_info.acked_features() != 0 {
-                error!("{}: Virtio features changed when reconnecting, avail features: 0x{:X}, acked features: 0x{:X}.",
+                error!("{}: Virtio features changed when reconnecting, avail features: 0x{:X}, acked features: 0x{:X}.", 
                     self.id, avail_features, self.device_info.acked_features());
                 return Err(VhostError::VhostUserProtocol(VhostUserError::FeatureMismatch).into());
             }
@@ -295,7 +304,7 @@ impl VhostUserNetDevice {
             // recreate it again.
             let (master, avail_features) = self.listener.accept()?;
             if !avail_features & self.device_info.acked_features() != 0 {
-                error!("{}: Virtio features changed when reconnecting, avail features: 0x{:X}, acked features: 0x{:X}.",
+                error!("{}: Virtio features changed when reconnecting, avail features: 0x{:X}, acked features: 0x{:X}.", 
                     self.id, avail_features, self.device_info.acked_features());
                 return Err(VhostError::VhostUserProtocol(VhostUserError::FeatureMismatch).into());
             }
@@ -351,7 +360,7 @@ where
         })
     }
 
-    fn device(&self) -> MutexGuard<'_, VhostUserNetDevice> {
+    fn device(&self) -> MutexGuard<VhostUserNetDevice> {
         // Do not expect poisoned lock.
         self.device.lock().unwrap()
     }
@@ -457,7 +466,7 @@ where
     Q: QueueT + Send + 'static,
     R: GuestMemoryRegion + Sync + Send + 'static,
 {
-    fn device(&self) -> MutexGuard<'_, VhostUserNetDevice> {
+    fn device(&self) -> MutexGuard<VhostUserNetDevice> {
         // Do not expect poisoned lock here
         self.device.lock().unwrap()
     }
@@ -590,13 +599,11 @@ where
 mod tests {
     use std::sync::Arc;
     use std::thread;
-    use std::time::{Duration, Instant};
 
     use dbs_device::resources::DeviceResources;
     use dbs_interrupt::{InterruptManager, InterruptSourceType, MsiNotifier, NoopNotifier};
     use dbs_utils::epoll_manager::EpollManager;
     use kvm_ioctls::Kvm;
-    use test_utils::skip_if_kvm_unaccessable;
     use vhost_rs::vhost_user::message::VhostUserU64;
     use vhost_rs::vhost_user::{VhostUserProtocolFeatures, VhostUserVirtioFeatures};
     use virtio_queue::QueueSync;
@@ -610,16 +617,19 @@ mod tests {
     };
     use crate::{VirtioDevice, VirtioDeviceConfig, VirtioQueueConfig, TYPE_NET};
 
-    fn connect_slave(path: &str, timeout: Duration) -> Option<Endpoint<MasterReq>> {
-        let deadline = Instant::now() + timeout;
+    fn connect_slave(path: &str) -> Option<Endpoint<MasterReq>> {
+        let mut retry_count = 5;
         loop {
             match Endpoint::<MasterReq>::connect(path) {
-                Ok(ep) => return Some(ep),
+                Ok(endpoint) => return Some(endpoint),
                 Err(_) => {
-                    if Instant::now() >= deadline {
+                    if retry_count > 0 {
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                        retry_count -= 1;
+                        continue;
+                    } else {
                         return None;
                     }
-                    thread::sleep(Duration::from_millis(20));
                 }
             }
         }
@@ -637,88 +647,61 @@ mod tests {
 
     #[test]
     fn test_vhost_user_net_virtio_device_normal() {
-        let dir_path = std::path::Path::new("/tmp");
-        let socket_path = dir_path.join(format!(
-            "vhost-user-net-{}-{:?}.sock",
-            std::process::id(),
-            thread::current().id()
-        ));
-        let socket_str = socket_path.to_str().unwrap().to_string();
-
-        let _ = std::fs::remove_file(&socket_path);
-
-        let queue_sizes = Arc::new(vec![128u16]);
+        let device_socket = "/tmp/vhost.1";
+        let queue_sizes = Arc::new(vec![128]);
         let epoll_mgr = EpollManager::default();
-
-        let socket_for_slave = socket_str.clone();
-        let slave_th = thread::spawn(move || {
-            let mut slave = connect_slave(&socket_for_slave, Duration::from_secs(5))
-                .unwrap_or_else(|| panic!("slave connect timeout: {}", socket_for_slave));
+        let handler = thread::spawn(move || {
+            let mut slave = connect_slave(device_socket).unwrap();
             create_vhost_user_net_slave(&mut slave);
         });
-
-        let (tx, rx) = std::sync::mpsc::channel();
-        let socket_for_master = socket_str.clone();
-        let queue_sizes_for_master = queue_sizes.clone();
-        let epoll_mgr_for_master = epoll_mgr.clone();
-        thread::spawn(move || {
-            let res = VhostUserNet::<Arc<GuestMemoryMmap>>::new_server(
-                &socket_for_master,
-                None,
-                queue_sizes_for_master,
-                epoll_mgr_for_master,
-            );
-            let _ = tx.send(res);
-        });
-
-        let dev_res = rx
-            .recv_timeout(Duration::from_secs(5))
-            .unwrap_or_else(|_| panic!("new_server() stuck/timeout: {}", socket_str));
-
-        let dev: VhostUserNet<Arc<GuestMemoryMmap>> = dev_res.unwrap_or_else(|e| {
-            panic!(
-                "new_server() returned error: {:?}, socket={}",
-                e, socket_str
-            )
-        });
-
+        let mut dev: VhostUserNet<Arc<GuestMemoryMmap>> =
+            VhostUserNet::new_server(device_socket, None, queue_sizes, epoll_mgr).unwrap();
         assert_eq!(
             VirtioDevice::<Arc<GuestMemoryMmap<()>>, QueueSync, GuestRegionMmap>::device_type(&dev),
             TYPE_NET
         );
-
-        let queue_size = [128u16];
+        let queue_size = vec![128];
         assert_eq!(
             VirtioDevice::<Arc<GuestMemoryMmap<()>>, QueueSync, GuestRegionMmap>::queue_max_sizes(
                 &dev
             ),
             &queue_size[..]
         );
-
-        slave_th.join().unwrap();
-
-        let _ = std::fs::remove_file(&socket_path);
-        drop(dev);
+        assert_eq!(
+            VirtioDevice::<Arc<GuestMemoryMmap<()>>, QueueSync, GuestRegionMmap>::get_avail_features(&dev, 0),
+            dev.device().device_info.get_avail_features(0)
+        );
+        assert_eq!(
+            VirtioDevice::<Arc<GuestMemoryMmap<()>>, QueueSync, GuestRegionMmap>::get_avail_features(&dev, 1),
+            dev.device().device_info.get_avail_features(1)
+        );
+        assert_eq!(
+            VirtioDevice::<Arc<GuestMemoryMmap<()>>, QueueSync, GuestRegionMmap>::get_avail_features(&dev, 2),
+            dev.device().device_info.get_avail_features(2)
+        );
+        VirtioDevice::<Arc<GuestMemoryMmap<()>>, QueueSync, GuestRegionMmap>::set_acked_features(
+            &mut dev, 2, 0,
+        );
+        assert_eq!(VirtioDevice::<Arc<GuestMemoryMmap<()>>, QueueSync, GuestRegionMmap>::get_avail_features(&dev, 2), 0);
+        let config: [u8; 8] = [0; 8];
+        VirtioDevice::<Arc<GuestMemoryMmap<()>>, QueueSync, GuestRegionMmap>::write_config(
+            &mut dev, 0, &config,
+        );
+        let mut data: [u8; 8] = [1; 8];
+        VirtioDevice::<Arc<GuestMemoryMmap<()>>, QueueSync, GuestRegionMmap>::read_config(
+            &mut dev, 0, &mut data,
+        );
+        assert_eq!(config, data);
+        handler.join().unwrap();
     }
 
     #[test]
     fn test_vhost_user_net_virtio_device_activate() {
-        skip_if_kvm_unaccessable!();
-        let dir_path = std::path::Path::new("/tmp");
-        let socket_path = dir_path.join(format!(
-            "vhost-user-net-{}-{:?}.sock",
-            std::process::id(),
-            thread::current().id()
-        ));
-        let socket_str = socket_path.to_str().unwrap().to_string();
-        let _ = std::fs::remove_file(&socket_path);
-
-        let queue_sizes = Arc::new(vec![128u16]);
+        let device_socket = "/tmp/vhost.1";
+        let queue_sizes = Arc::new(vec![128]);
         let epoll_mgr = EpollManager::default();
-        let socket_for_slave = socket_str.clone();
-        let slave_th = thread::spawn(move || {
-            let mut slave = connect_slave(&socket_for_slave, Duration::from_secs(10))
-                .unwrap_or_else(|| panic!("slave connect timeout: {}", socket_for_slave));
+        let handler = thread::spawn(move || {
+            let mut slave = connect_slave(device_socket).unwrap();
             create_vhost_user_net_slave(&mut slave);
             let mut pfeatures = VhostUserProtocolFeatures::all();
             // A workaround for no support for `INFLIGHT_SHMFD`. File an issue to track
@@ -726,30 +709,8 @@ mod tests {
             pfeatures -= VhostUserProtocolFeatures::INFLIGHT_SHMFD;
             negotiate_slave(&mut slave, pfeatures, true, 1);
         });
-
-        let (tx, rx) = std::sync::mpsc::channel();
-        let socket_for_master = socket_str.clone();
-        let queue_sizes_for_master = queue_sizes.clone();
-        let epoll_mgr_for_master = epoll_mgr.clone();
-        thread::spawn(move || {
-            let res = VhostUserNet::<Arc<GuestMemoryMmap>>::new_server(
-                &socket_for_master,
-                None,
-                queue_sizes_for_master,
-                epoll_mgr_for_master,
-            );
-            let _ = tx.send(res);
-        });
-        let mut dev: VhostUserNet<Arc<GuestMemoryMmap>> = rx
-            .recv_timeout(Duration::from_secs(10))
-            .unwrap_or_else(|_| panic!("new_server() stuck/timeout: {}", socket_str))
-            .unwrap_or_else(|e| {
-                panic!(
-                    "new_server() returned error: {:?}, socket={}",
-                    e, socket_str
-                )
-            });
-
+        let mut dev: VhostUserNet<Arc<GuestMemoryMmap>> =
+            VhostUserNet::new_server(device_socket, None, queue_sizes, epoll_mgr).unwrap();
         // invalid queue size
         {
             let kvm = Kvm::new().unwrap();
@@ -806,9 +767,6 @@ mod tests {
                 );
             dev.activate(config).unwrap();
         }
-        slave_th.join().unwrap();
-
-        let _ = std::fs::remove_file(&socket_path);
-        drop(dev);
+        handler.join().unwrap();
     }
 }

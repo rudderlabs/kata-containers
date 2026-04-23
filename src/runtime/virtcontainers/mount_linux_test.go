@@ -255,7 +255,7 @@ func TestIsHostDevice(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		result, _ := isHostDevice(test.mnt)
+		result := isHostDevice(test.mnt)
 		assert.Equal(result, test.expected)
 	}
 }

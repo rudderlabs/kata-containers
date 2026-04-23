@@ -38,14 +38,14 @@ const (
 
 	nydusdStopTimeoutSecs = 5
 
-	defaultHttpClientTimeout = 30 * time.Second
-	contentType              = "application/json"
+	defaultHttpClientTimeoutSecs = 30 * time.Second
+	contentType                  = "application/json"
 
-	maxIdleConns          = 10
-	idleConnTimeout       = 10 * time.Second
-	dialTimout            = 5 * time.Second
-	keepAlive             = 5 * time.Second
-	expectContinueTimeout = 1 * time.Second
+	maxIdleConns              = 10
+	idleConnTimeoutSecs       = 10 * time.Second
+	dialTimoutSecs            = 5 * time.Second
+	keepAliveSecs             = 5 * time.Second
+	expectContinueTimeoutSecs = 1 * time.Second
 
 	// Registry Acceleration File System which is nydus provide to accelerate image load
 	nydusRafs = "rafs"
@@ -345,7 +345,7 @@ func NewNydusClient(sock string) (Interface, error) {
 	}
 	return &NydusClient{
 		httpClient: &http.Client{
-			Timeout:   defaultHttpClientTimeout,
+			Timeout:   defaultHttpClientTimeoutSecs,
 			Transport: transport,
 		},
 	}, nil
@@ -370,12 +370,12 @@ func buildTransport(sock string) (http.RoundTripper, error) {
 	}
 	return &http.Transport{
 		MaxIdleConns:          maxIdleConns,
-		IdleConnTimeout:       idleConnTimeout,
-		ExpectContinueTimeout: expectContinueTimeout,
+		IdleConnTimeout:       idleConnTimeoutSecs,
+		ExpectContinueTimeout: expectContinueTimeoutSecs,
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			dialer := &net.Dialer{
-				Timeout:   dialTimout,
-				KeepAlive: keepAlive,
+				Timeout:   dialTimoutSecs,
+				KeepAlive: keepAliveSecs,
 			}
 			return dialer.DialContext(ctx, "unix", sock)
 		},

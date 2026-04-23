@@ -170,7 +170,7 @@ func createTuntapNetworkEndpoint(idx int, ifName string, hwName net.HardwareAddr
 			Name: fmt.Sprintf("eth%d", idx),
 			TAPIface: NetworkInterface{
 				Name:     fmt.Sprintf("tap%d_kata", idx),
-				HardAddr: hwName.String(),
+				HardAddr: fmt.Sprintf("%s", hwName), //nolint:gosimple
 			},
 		},
 		EndpointType: TuntapEndpointType,

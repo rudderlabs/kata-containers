@@ -54,6 +54,10 @@ pub struct CronJobSpec {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     timeZone: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    backoffLimit: Option<i32>,
+    // TODO: additional fields.
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -76,12 +80,7 @@ impl yaml::K8sResource for CronJob {
     }
 
     fn get_sandbox_name(&self) -> Option<String> {
-        // CronJob name - time[min]
-        // https://github.com/kubernetes/kubernetes/blob/b35c5c0a301d326fdfa353943fca077778544ac6/pkg/controller/cronjob/cronjob_controllerv2.go#L672
-        let cronjob_name = yaml::name_regex_from_meta(&self.metadata);
-        let job_name = cronjob_name.map(|prefix| format!("{prefix}-[0-9]+"));
-        // Pod name now derives from the generated job name.
-        job_name.map(job::pod_name_regex)
+        None
     }
 
     fn get_namespace(&self) -> Option<String> {
@@ -100,12 +99,12 @@ impl yaml::K8sResource for CronJob {
             storages,
             container,
             settings,
-            &self.spec.jobTemplate.spec.template.spec,
+            &self.spec.jobTemplate.spec.template.spec.volumes,
         );
     }
 
-    fn generate_initdata_anno(&self, agent_policy: &policy::AgentPolicy) -> String {
-        agent_policy.generate_initdata_anno(self)
+    fn generate_policy(&self, agent_policy: &policy::AgentPolicy) -> String {
+        agent_policy.generate_policy(self)
     }
 
     fn serialize(&mut self, policy: &str) -> String {
@@ -149,31 +148,15 @@ impl yaml::K8sResource for CronJob {
         false
     }
 
-    fn get_process_fields(
-        &self,
-        process: &mut policy::KataProcess,
-        must_check_passwd: &mut bool,
-        is_pause_container: bool,
-    ) {
+    fn get_process_fields(&self, process: &mut policy::KataProcess, must_check_passwd: &mut bool) {
         yaml::get_process_fields(
             process,
-            must_check_passwd,
-            is_pause_container,
             &self.spec.jobTemplate.spec.template.spec.securityContext,
+            must_check_passwd,
         );
     }
 
     fn get_sysctls(&self) -> Vec<pod::Sysctl> {
         yaml::get_sysctls(&self.spec.jobTemplate.spec.template.spec.securityContext)
-    }
-
-    fn get_pod_security_context(&self) -> Option<&pod::PodSecurityContext> {
-        self.spec
-            .jobTemplate
-            .spec
-            .template
-            .spec
-            .securityContext
-            .as_ref()
     }
 }

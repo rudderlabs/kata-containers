@@ -157,24 +157,12 @@ type HypervisorConfig struct {
 	// Denotes whether flush requests for the device are ignored.
 	BlockDeviceCacheNoflush bool
 
-	// BlockDeviceLogicalSectorSize specifies the logical sector size reported
-	// by block devices to the guest, in bytes.
-	BlockDeviceLogicalSectorSize uint32
-
-	// BlockDevicePhysicalSectorSize specifies the physical sector size reported
-	// by block devices to the guest, in bytes.
-	BlockDevicePhysicalSectorSize uint32
-
 	// DisableBlockDeviceUse disallows a block device from being used.
 	DisableBlockDeviceUse bool
 
 	// EnableIOThreads enables IO to be processed in a separate thread.
-	// Supported currently for virtio-scsi and virtio-blk(based on IndepIOThreads) driver.
+	// Supported currently for virtio-scsi driver.
 	EnableIOThreads bool
-
-	// Independent IOThreads enables IO to be processed in a separate thread, it is
-	// for QEMU hotplug device attach to iothread, like virtio-blk.
-	IndepIOThreads uint32
 
 	// Debug changes the default hypervisor and kernel parameters to
 	// enable debug output where available.

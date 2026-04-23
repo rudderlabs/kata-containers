@@ -8,6 +8,7 @@ kind: Pod
 metadata:
   name: stability-test
 spec:
+  terminationGracePeriodSeconds: 0
   runtimeClassName: kata
   containers:
   - name: stability-test

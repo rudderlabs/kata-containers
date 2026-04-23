@@ -22,7 +22,6 @@ pub mod remote;
 pub mod remote_ttrpc;
 #[cfg(feature = "async")]
 pub mod remote_ttrpc_async;
-pub mod runtimeoptions;
 #[cfg(feature = "with-serde")]
 mod serde_config;
 pub mod trans;

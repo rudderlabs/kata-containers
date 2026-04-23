@@ -5,7 +5,7 @@
 
 use std::ffi::{CString, OsStr};
 use std::fs::{self, File, Metadata, OpenOptions};
-use std::io::{Error, Result};
+use std::io::{Error, ErrorKind, Result};
 use std::ops::Deref;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::OpenOptionsExt;
@@ -15,7 +15,7 @@ use std::path::{Component, Path, PathBuf};
 use crate::scoped_join;
 
 /// A safe version of [`PathBuf`] pinned to an underlying filesystem object to protect from
-/// `TOCTOU` style of attacks.
+/// `TOCTTOU` style of attacks.
 ///
 /// A [`PinnedPathBuf`] is a resolved path buffer pinned to an underlying filesystem object, which
 /// guarantees:
@@ -168,11 +168,14 @@ impl PinnedPathBuf {
         let path = Self::get_proc_path(handle.as_raw_fd());
         let link_path = fs::read_link(path.as_path())?;
         if link_path != orig_path.as_ref() {
-            Err(Error::other(format!(
-                "Path changed from {} to {} on open, possible attack",
-                orig_path.as_ref().display(),
-                link_path.display()
-            )))
+            Err(Error::new(
+                ErrorKind::Other,
+                format!(
+                    "Path changed from {} to {} on open, possible attack",
+                    orig_path.as_ref().display(),
+                    link_path.display()
+                ),
+            ))
         } else {
             Ok(PinnedPathBuf {
                 handle,
@@ -188,24 +191,24 @@ impl PinnedPathBuf {
         let mut comps = path.components();
         let name = comps.next();
         if !matches!(name, Some(Component::Normal(_))) || comps.next().is_some() {
-            return Err(Error::other(format!(
-                "Path component {} is invalid",
-                path_comp.to_string_lossy()
-            )));
+            return Err(Error::new(
+                ErrorKind::Other,
+                format!("Path component {} is invalid", path_comp.to_string_lossy()),
+            ));
         }
         let name = name.unwrap();
         if name.as_os_str() != path_comp {
-            return Err(Error::other(format!(
-                "Path component {} is invalid",
-                path_comp.to_string_lossy()
-            )));
+            return Err(Error::new(
+                ErrorKind::Other,
+                format!("Path component {} is invalid", path_comp.to_string_lossy()),
+            ));
         }
 
         CString::new(path_comp.as_bytes()).map_err(|_e| {
-            Error::other(format!(
-                "Path component {} is invalid",
-                path_comp.to_string_lossy()
-            ))
+            Error::new(
+                ErrorKind::Other,
+                format!("Path component {} is invalid", path_comp.to_string_lossy()),
+            )
         })
     }
 }
@@ -352,7 +355,6 @@ mod tests {
             .read(false)
             .write(true)
             .create(true)
-            .truncate(true)
             .mode(0o200)
             .open(&path)
             .unwrap();
@@ -374,7 +376,6 @@ mod tests {
             .read(false)
             .write(true)
             .create(true)
-            .truncate(true)
             .mode(0o200)
             .open(&path)
             .unwrap();

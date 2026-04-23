@@ -5,13 +5,12 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-load "${BATS_TEST_DIRNAME}/lib.sh"
 load "${BATS_TEST_DIRNAME}/../../common.bash"
 load "${BATS_TEST_DIRNAME}/tests_common.sh"
 
 setup() {
-	setup_common || die "setup_common failed"
 	pod_name="memory-test"
+	get_pod_config_dir
 }
 
 setup_yaml() {
@@ -64,5 +63,4 @@ setup_yaml() {
 teardown() {
 	# Debugging information
 	kubectl describe "pod/$pod_name" || true
-	teardown_common "${node}" "${node_start_time:-}"
 }

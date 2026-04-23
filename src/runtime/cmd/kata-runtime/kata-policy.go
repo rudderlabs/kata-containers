@@ -62,7 +62,7 @@ var setPolicyCommand = cli.Command{
 			return err
 		}
 
-		url := containerdshim.PolicyURL
+		url := containerdshim.PolicyUrl
 
 		if err = shimclient.DoPut(sandboxID, defaultTimeout, url, "application/octet-stream", buf); err != nil {
 			return fmt.Errorf("Error observed when making policy-set request(%s): %s", policyFile, err)

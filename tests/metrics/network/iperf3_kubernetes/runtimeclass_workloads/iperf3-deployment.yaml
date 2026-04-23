@@ -38,6 +38,7 @@ spec:
         ports:
         - containerPort: 5201
           name: server
+      terminationGracePeriodSeconds: 0
       runtimeClassName: kata
 
 ---

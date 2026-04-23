@@ -3,9 +3,9 @@
 ## Kubernetes Integration
 
 - [Run Kata containers with `crictl`](run-kata-with-crictl.md)
+- [Run Kata Containers with Kubernetes](run-kata-with-k8s.md)
 - [How to use Kata Containers and Containerd](containerd-kata.md)
 - [How to use Kata Containers and containerd with Kubernetes](how-to-use-k8s-with-containerd-and-kata.md)
-- [How to use Kata Containers and CRI-O with Kubernetes](how-to-use-k8s-with-crio-and-kata.md)
 - [Kata Containers and service mesh for Kubernetes](service-mesh.md)
 - [How to import Kata Containers logs into Fluentd](how-to-import-kata-logs-with-fluentd.md)
 
@@ -31,7 +31,6 @@
 - [Setting Sysctls with Kata](how-to-use-sysctls-with-kata.md)
 - [What Is VMCache and How To Enable It](what-is-vm-cache-and-how-do-I-use-it.md)
 - [What Is VM Templating and How To Enable It](what-is-vm-templating-and-how-do-I-use-it.md)
-- [How to Use Template in runtime-rs](how-to-use-template-in-runtime-rs.md)
 - [Privileged Kata Containers](privileged.md)
 - [How to load kernel modules in Kata Containers](how-to-load-kernel-modules-with-kata.md)
 - [How to use Kata Containers with `virtio-mem`](how-to-use-virtio-mem-with-kata.md)
@@ -49,5 +48,3 @@
 - [How to use the Kata Agent Policy](how-to-use-the-kata-agent-policy.md)
 - [How to pull images in the guest](how-to-pull-images-in-guest-with-kata.md)
 - [How to use mem-agent to decrease the memory usage of Kata container](how-to-use-memory-agent.md)
-- [How to use seccomp with runtime-rs](how-to-use-seccomp-with-runtime-rs.md)
-- [How to use passthroughfd-IO with runtime-rs and Dragonball](how-to-use-passthroughfd-io-within-runtime-rs.md)

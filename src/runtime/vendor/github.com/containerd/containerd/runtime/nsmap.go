@@ -31,7 +31,7 @@ type object interface {
 
 // NSMap extends Map type with a notion of namespaces passed via Context.
 type NSMap[T object] struct {
-	mu      sync.RWMutex
+	mu      sync.Mutex
 	objects map[string]map[string]T
 }
 
@@ -44,14 +44,13 @@ func NewNSMap[T object]() *NSMap[T] {
 
 // Get a task
 func (m *NSMap[T]) Get(ctx context.Context, id string) (T, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	namespace, err := namespaces.NamespaceRequired(ctx)
 	var t T
 	if err != nil {
 		return t, err
 	}
-
-	m.mu.RLock()
-	defer m.mu.RUnlock()
 	tasks, ok := m.objects[namespace]
 	if !ok {
 		return t, errdefs.ErrNotFound
@@ -65,8 +64,8 @@ func (m *NSMap[T]) Get(ctx context.Context, id string) (T, error) {
 
 // GetAll objects under a namespace
 func (m *NSMap[T]) GetAll(ctx context.Context, noNS bool) ([]T, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	var o []T
 	if noNS {
 		for ns := range m.objects {
@@ -101,10 +100,10 @@ func (m *NSMap[T]) Add(ctx context.Context, t T) error {
 
 // AddWithNamespace adds a task with the provided namespace
 func (m *NSMap[T]) AddWithNamespace(namespace string, t T) error {
-	id := t.ID()
-
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	id := t.ID()
 	if _, ok := m.objects[namespace]; !ok {
 		m.objects[namespace] = make(map[string]T)
 	}
@@ -117,13 +116,12 @@ func (m *NSMap[T]) AddWithNamespace(namespace string, t T) error {
 
 // Delete a task
 func (m *NSMap[T]) Delete(ctx context.Context, id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	namespace, err := namespaces.NamespaceRequired(ctx)
 	if err != nil {
 		return
 	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	tasks, ok := m.objects[namespace]
 	if ok {
 		delete(tasks, id)
@@ -131,8 +129,8 @@ func (m *NSMap[T]) Delete(ctx context.Context, id string) {
 }
 
 func (m *NSMap[T]) IsEmpty() bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	for ns := range m.objects {
 		if len(m.objects[ns]) > 0 {

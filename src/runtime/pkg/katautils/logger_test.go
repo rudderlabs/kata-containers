@@ -90,7 +90,7 @@ func TestNewSystemLogHook(t *testing.T) {
 
 	output := string(bytes)
 	output = strings.TrimSpace(output)
-	output = strings.ReplaceAll(output, `"`, "")
+	output = strings.Replace(output, `"`, "", -1)
 
 	fields := strings.Fields(output)
 

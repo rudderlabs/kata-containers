@@ -55,9 +55,9 @@ var getIPTablesCommand = cli.Command{
 			return err
 		}
 
-		url := containerdshim.IPTablesURL
+		url := containerdshim.IPTablesUrl
 		if isIPv6 {
-			url = containerdshim.IP6TablesURL
+			url = containerdshim.IP6TablesUrl
 		}
 		body, err := shimclient.DoGet(sandboxID, defaultTimeout, url)
 		if err != nil {
@@ -108,9 +108,9 @@ var setIPTablesCommand = cli.Command{
 			return err
 		}
 
-		url := containerdshim.IPTablesURL
+		url := containerdshim.IPTablesUrl
 		if isIPv6 {
-			url = containerdshim.IP6TablesURL
+			url = containerdshim.IP6TablesUrl
 		}
 
 		if err = shimclient.DoPut(sandboxID, defaultTimeout, url, "application/octet-stream", buf); err != nil {

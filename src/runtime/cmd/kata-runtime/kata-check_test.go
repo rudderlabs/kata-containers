@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/kata-containers/kata-containers/src/runtime/pkg/katatestutils"
+	ktu "github.com/kata-containers/kata-containers/src/runtime/pkg/katatestutils"
 	"github.com/kata-containers/kata-containers/src/runtime/pkg/katautils"
 	vc "github.com/kata-containers/kata-containers/src/runtime/virtcontainers"
 	"github.com/sirupsen/logrus"
@@ -508,7 +509,7 @@ func TestCheckCheckCPUAttribs(t *testing.T) {
 }
 
 func TestCheckHaveKernelModule(t *testing.T) {
-	if tc.NotValid(katatestutils.NeedRoot()) {
+	if tc.NotValid(ktu.NeedRoot()) {
 		t.Skip(testDisabledAsNonRoot)
 	}
 
@@ -637,8 +638,8 @@ func TestCheckCheckKernelModules(t *testing.T) {
 func TestCheckCheckKernelModulesUnreadableFile(t *testing.T) {
 	assert := assert.New(t)
 
-	if tc.NotValid(katatestutils.NeedNonRoot()) {
-		t.Skip(katatestutils.TestDisabledNeedNonRoot)
+	if tc.NotValid(ktu.NeedNonRoot()) {
+		t.Skip(ktu.TestDisabledNeedNonRoot)
 	}
 
 	dir := t.TempDir()

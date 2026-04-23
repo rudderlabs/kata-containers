@@ -4,15 +4,12 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-# ARM 64 settings
-
-MACHINETYPE := virt
+MACHINETYPE :=
 KERNELPARAMS := cgroup_no_v1=all systemd.unified_cgroup_hierarchy=1
-MACHINEACCELERATORS := usb=off,gic-version=host
+MACHINEACCELERATORS :=
 CPUFEATURES := pmu=off
 
 QEMUCMD := qemu-system-aarch64
-QEMUFW := AAVMF_CODE.fd
 
 # dragonball binary name
 DBCMD := dragonball

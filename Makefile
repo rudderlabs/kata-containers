@@ -18,6 +18,7 @@ TOOLS =
 TOOLS += agent-ctl
 TOOLS += kata-ctl
 TOOLS += log-parser
+TOOLS += runk
 TOOLS += trace-forwarder
 
 STANDARD_TARGETS = build check clean install static-checks-build test vendor
@@ -41,19 +42,13 @@ generate-protocols:
 
 # Some static checks rely on generated source files of components.
 static-checks: static-checks-build
-	bash tests/static-checks.sh
+	bash tests/static-checks.sh github.com/kata-containers/kata-containers
 
 docs-url-alive-check:
 	bash ci/docs-url-alive-check.sh
 
 build-and-publish-kata-debug:
-	bash tools/packaging/kata-debug/kata-debug-build-and-upload-payload.sh ${KATA_DEBUG_REGISTRY} ${KATA_DEBUG_TAG}
-
-docs-build:
-	docker build -t kata-docs:latest -f ./docs/Dockerfile ./docs
-
-docs-serve: docs-build
-	docker run --rm -p 8000:8000 -v ${PWD}:/docs:ro kata-docs:latest serve --config-file /docs/mkdocs.yaml -a 0.0.0.0:8000
+	bash tools/packaging/kata-debug/kata-debug-build-and-upload-payload.sh ${KATA_DEBUG_REGISTRY} ${KATA_DEBUG_TAG} 
 
 .PHONY: \
 	all \
@@ -61,6 +56,4 @@ docs-serve: docs-build
 	install-tarball \
 	default \
 	static-checks \
-	docs-url-alive-check \
-	docs-build \
-	docs-serve
+	docs-url-alive-check

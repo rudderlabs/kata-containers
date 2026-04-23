@@ -9,7 +9,6 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -177,14 +176,10 @@ func TestKataAgentSendReq(t *testing.T) {
 	assert.Nil(err)
 
 	_, err = k.readProcessStdout(ctx, container, execid, []byte{})
-	if err != nil {
-		assert.ErrorIs(err, io.EOF)
-	}
+	assert.Nil(err)
 
 	_, err = k.readProcessStderr(ctx, container, execid, []byte{})
-	if err != nil {
-		assert.ErrorIs(err, io.EOF)
-	}
+	assert.Nil(err)
 
 	_, err = k.getOOMEvent(ctx)
 	assert.Nil(err)
@@ -1333,7 +1328,7 @@ func TestKataAgentCreateContainerVFIODevices(t *testing.T) {
 			}
 
 			// Call createDevices which should trigger the full flow
-			err = container.createDevices(context.Background(), contConfig)
+			err = container.createDevices(contConfig)
 			assert.NoError(err)
 
 			// Find the device in device manager using the original device info

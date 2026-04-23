@@ -6,7 +6,7 @@ use log::{debug, error, warn};
 use virtio_bindings::bindings::virtio_net::{
     virtio_net_ctrl_hdr, virtio_net_ctrl_mq, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET,
 };
-use virtio_queue::{desc::split::Descriptor, DescriptorChain};
+use virtio_queue::{Descriptor, DescriptorChain};
 use vm_memory::{Bytes, GuestMemory};
 
 use crate::{DbsGuestAddressSpace, Error as VirtioError, Result as VirtioResult};
@@ -17,7 +17,7 @@ pub(crate) trait FromNetCtrl<T> {
         match mem.read_slice(&mut buf, desc.addr()) {
             Ok(_) => unsafe { Ok(std::ptr::read_volatile(&buf[..] as *const _ as *const T)) },
             Err(err) => {
-                error!("Failed to read from memory, {err}");
+                error!("Failed to read from memory, {}", err);
                 Err(VirtioError::InternalError)
             }
         }
@@ -63,10 +63,10 @@ where
         if next.is_write_only() {
             match mem.write_slice(&buf, next.addr()) {
                 Ok(_) => {
-                    debug!("{driver_name}: succeed to update virtio ctrl status!");
+                    debug!("{}: succeed to update virtio ctrl status!", driver_name);
                     total += 1;
                 }
-                Err(_) => warn!("{driver_name}: failed to update ctrl status!"),
+                Err(_) => warn!("{}: failed to update ctrl status!", driver_name),
             }
         }
     }

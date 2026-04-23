@@ -32,7 +32,7 @@ import (
 
 	"github.com/containerd/console"
 	chclient "github.com/kata-containers/kata-containers/src/runtime/virtcontainers/pkg/cloud-hypervisor/client"
-	selinux "github.com/opencontainers/selinux/go-selinux"
+	"github.com/opencontainers/selinux/go-selinux/label"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 
@@ -43,7 +43,6 @@ import (
 	"github.com/kata-containers/kata-containers/src/runtime/virtcontainers/pkg/rootless"
 	"github.com/kata-containers/kata-containers/src/runtime/virtcontainers/types"
 	"github.com/kata-containers/kata-containers/src/runtime/virtcontainers/utils"
-	"github.com/kata-containers/kata-containers/src/runtime/virtcontainers/utils/retry"
 )
 
 // clhTracingTags defines tags for the trace span
@@ -159,21 +158,20 @@ func (c *clhClientApi) VmRemoveDevicePut(ctx context.Context, vmRemoveDevice chc
 
 // This is done in order to be able to override such a function as part of
 // our unit tests, as when testing bootVM we're on a mocked scenario already.
-var vmAddNetPutRequest = func(clh *cloudHypervisor) ([]chclient.PciDeviceInfo, error) {
-	var netDevicesPciInfo []chclient.PciDeviceInfo
+var vmAddNetPutRequest = func(clh *cloudHypervisor) error {
 	if clh.netDevices == nil {
 		clh.Logger().Info("No network device has been configured by the upper layer")
-		return nil, nil
+		return nil
 	}
 
 	addr, err := net.ResolveUnixAddr("unix", clh.state.apiSocket)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	conn, err := net.DialUnix("unix", nil, addr)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer conn.Close()
 
@@ -182,13 +180,13 @@ var vmAddNetPutRequest = func(clh *cloudHypervisor) ([]chclient.PciDeviceInfo, e
 
 		netDeviceAsJson, err := json.Marshal(netDevice)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		netDeviceAsIoReader := bytes.NewBuffer(netDeviceAsJson)
 
 		req, err := http.NewRequest(http.MethodPut, "http://localhost/api/v1/vm.add-net", netDeviceAsIoReader)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		req.Header.Set("Accept", "application/json")
@@ -197,7 +195,7 @@ var vmAddNetPutRequest = func(clh *cloudHypervisor) ([]chclient.PciDeviceInfo, e
 
 		payload, err := httputil.DumpRequest(req, true)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		files := clh.netDevicesFiles[*netDevice.Mac]
@@ -208,45 +206,33 @@ var vmAddNetPutRequest = func(clh *cloudHypervisor) ([]chclient.PciDeviceInfo, e
 		oob := syscall.UnixRights(fds...)
 		payloadn, oobn, err := conn.WriteMsgUnix([]byte(payload), oob, nil)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if payloadn != len(payload) || oobn != len(oob) {
-			return nil, fmt.Errorf("Failed to send all the request to Cloud Hypervisor. %d bytes expect to send as payload, %d bytes expect to send as oob date,  but only %d sent as payload, and %d sent as oob", len(payload), len(oob), payloadn, oobn)
+			return fmt.Errorf("Failed to send all the request to Cloud Hypervisor. %d bytes expect to send as payload, %d bytes expect to send as oob date,  but only %d sent as payload, and %d sent as oob", len(payload), len(oob), payloadn, oobn)
 		}
 
 		reader := bufio.NewReader(conn)
 		resp, err := http.ReadResponse(reader, req)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		respBody, err := io.ReadAll(resp.Body)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		resp.Body.Close()
 		resp.Body = io.NopCloser(bytes.NewBuffer(respBody))
+
 		if resp.StatusCode != 200 && resp.StatusCode != 204 {
 			clh.Logger().Errorf("vmAddNetPut failed with error '%d'. Response: %+v", resp.StatusCode, resp)
-			return nil, fmt.Errorf("Failed to add the network device '%+v' to Cloud Hypervisor: %v", netDevice, resp.StatusCode)
-		}
-
-		// Parse the pci info received in response
-		var pciInfo chclient.PciDeviceInfo
-		decoder := json.NewDecoder(resp.Body)
-		err = decoder.Decode(&pciInfo)
-		if err != nil && err.Error() != "EOF" {
-			return nil, err
-		}
-		// PciInfo is received in response after the
-		// vm is booted.
-		if err == nil {
-			netDevicesPciInfo = append(netDevicesPciInfo, pciInfo)
+			return fmt.Errorf("Failed to add the network device '%+v' to Cloud Hypervisor: %v", netDevice, resp.StatusCode)
 		}
 	}
 
-	return netDevicesPciInfo, nil
+	return nil
 }
 
 // Cloud hypervisor state
@@ -331,9 +317,6 @@ func (clh *cloudHypervisor) getClhStopSandboxTimeout() time.Duration {
 
 func (clh *cloudHypervisor) setConfig(config *HypervisorConfig) error {
 	clh.config = *config
-
-	// We don't support NVDIMM with Cloud Hypervisor.
-	clh.config.DisableImageNvdimm = true
 
 	return nil
 }
@@ -469,8 +452,8 @@ func (clh *cloudHypervisor) enableProtection() error {
 	}
 }
 
-func getNonUserDefinedKernelParams(rootfstype string, disableNvdimm bool, dax bool, debug bool, confidential bool, iommu bool, kernelVerityParams string) ([]Param, error) {
-	params, err := GetKernelRootParams(rootfstype, disableNvdimm, dax, kernelVerityParams)
+func getNonUserDefinedKernelParams(rootfstype string, disableNvdimm bool, dax bool, debug bool, confidential bool, iommu bool) ([]Param, error) {
+	params, err := GetKernelRootParams(rootfstype, disableNvdimm, dax)
 	if err != nil {
 		return []Param{}, err
 	}
@@ -587,15 +570,10 @@ func (clh *cloudHypervisor) CreateVM(ctx context.Context, id string, network Net
 	// Set initial amount of cpu's for the virtual machine
 	clh.vmconfig.Cpus = chclient.NewCpusConfig(int32(clh.config.NumVCPUs()), int32(clh.config.DefaultMaxVCPUs))
 
-	if pathExists("/dev/mshv") {
-		// The nested property is true by default, but is not supported yet on MSHV.
-		clh.vmconfig.Cpus.SetNested(false)
-	}
+	disableNvdimm := (clh.config.DisableImageNvdimm || clh.config.ConfidentialGuest)
+	enableDax := !disableNvdimm
 
-	disableNvdimm := true
-	enableDax := false
-
-	params, err := getNonUserDefinedKernelParams(hypervisorConfig.RootfsType, disableNvdimm, enableDax, clh.config.Debug, clh.config.ConfidentialGuest, clh.config.IOMMU, hypervisorConfig.KernelVerityParams)
+	params, err := getNonUserDefinedKernelParams(hypervisorConfig.RootfsType, disableNvdimm, enableDax, clh.config.Debug, clh.config.ConfidentialGuest, clh.config.IOMMU)
 	if err != nil {
 		return err
 	}
@@ -615,20 +593,30 @@ func (clh *cloudHypervisor) CreateVM(ctx context.Context, id string, network Net
 	}
 
 	if assetType == types.ImageAsset {
-		disk := chclient.NewDiskConfig()
-		disk.Path = &assetPath
-		disk.SetReadonly(true)
-		disk.SetImageType("Raw")
+		if clh.config.DisableImageNvdimm || clh.config.ConfidentialGuest {
+			disk := chclient.NewDiskConfig(assetPath)
+			disk.SetReadonly(true)
 
-		diskRateLimiterConfig := clh.getDiskRateLimiterConfig()
-		if diskRateLimiterConfig != nil {
-			disk.SetRateLimiterConfig(*diskRateLimiterConfig)
-		}
+			diskRateLimiterConfig := clh.getDiskRateLimiterConfig()
+			if diskRateLimiterConfig != nil {
+				disk.SetRateLimiterConfig(*diskRateLimiterConfig)
+			}
 
-		if clh.vmconfig.Disks != nil {
-			*clh.vmconfig.Disks = append(*clh.vmconfig.Disks, *disk)
+			if clh.vmconfig.Disks != nil {
+				*clh.vmconfig.Disks = append(*clh.vmconfig.Disks, *disk)
+			} else {
+				clh.vmconfig.Disks = &[]chclient.DiskConfig{*disk}
+			}
 		} else {
-			clh.vmconfig.Disks = &[]chclient.DiskConfig{*disk}
+			pmem := chclient.NewPmemConfig(assetPath)
+			*pmem.DiscardWrites = true
+			pmem.SetIommu(clh.config.IOMMU)
+
+			if clh.vmconfig.Pmem != nil {
+				*clh.vmconfig.Pmem = append(*clh.vmconfig.Pmem, *pmem)
+			} else {
+				clh.vmconfig.Pmem = &[]chclient.PmemConfig{*pmem}
+			}
 		}
 	} else {
 		// assetType == types.InitrdAsset
@@ -696,24 +684,17 @@ func (clh *cloudHypervisor) CreateVM(ctx context.Context, id string, network Net
 		return err
 	}
 
-	if err := setupInitdata(clh, hypervisorConfig); err != nil {
-		return err
+	if clh.config.SGXEPCSize > 0 {
+		epcSection := chclient.NewSgxEpcConfig("kata-epc", clh.config.SGXEPCSize)
+		epcSection.Prefault = func(b bool) *bool { return &b }(true)
+
+		if clh.vmconfig.SgxEpc != nil {
+			*clh.vmconfig.SgxEpc = append(*clh.vmconfig.SgxEpc, *epcSection)
+		} else {
+			clh.vmconfig.SgxEpc = &[]chclient.SgxEpcConfig{*epcSection}
+		}
+
 	}
-
-	return nil
-}
-
-// setupInitdata prepares and attaches the initdata disk if present.
-func setupInitdata(clh *cloudHypervisor, hypervisorConfig *HypervisorConfig) error {
-	if len(hypervisorConfig.Initdata) == 0 {
-		return nil
-	}
-
-	if err := prepareInitdataMount(clh.Logger(), clh.id, hypervisorConfig); err != nil {
-		return err
-	}
-
-	clh.addInitdataDisk(hypervisorConfig.InitdataImage)
 
 	return nil
 }
@@ -737,10 +718,10 @@ func (clh *cloudHypervisor) StartVM(ctx context.Context, timeout int) error {
 	// notwant to run them under confinement.
 	if !clh.config.DisableSeLinux {
 
-		if err := selinux.SetExecLabel(clh.config.SELinuxProcessLabel); err != nil {
+		if err := label.SetProcessLabel(clh.config.SELinuxProcessLabel); err != nil {
 			return err
 		}
-		defer selinux.SetExecLabel("")
+		defer label.SetProcessLabel("")
 	}
 
 	err = clh.setupVirtiofsDaemon(ctx)
@@ -882,45 +863,6 @@ func clhPciInfoToPath(pciInfo chclient.PciDeviceInfo) (types.PciPath, error) {
 	return types.PciPathFromString(tokens[0])
 }
 
-// addInitdataDisk attaches initdataImage to the CLH VM as a read-only virtio-blk disk.
-// It builds a DiskConfig (Readonly=true, VhostUser=false), sets one queue per vCPU
-// with queue size 1024, applies Direct-I/O/IOMMU/rate-limiter from clh.config, and
-// appends the disk to the pending VM config (no hotplug).
-func (clh *cloudHypervisor) addInitdataDisk(initdataImage string) {
-	disk := chclient.NewDiskConfig()
-	disk.Path = &initdataImage
-
-	ro := true
-	disk.Readonly = &ro
-
-	// Use virtio-blk
-	vu := false
-	disk.VhostUser = &vu
-
-	// Reasonable queues; mirror your hotplug path
-	queues := int32(clh.config.NumVCPUs())
-	qsz := int32(1024)
-	disk.NumQueues = &queues
-	disk.QueueSize = &qsz
-
-	// Honor runtime settings
-	if clh.config.BlockDeviceCacheSet {
-		disk.Direct = &clh.config.BlockDeviceCacheDirect
-	}
-	disk.SetIommu(clh.config.IOMMU)
-	disk.SetImageType("Raw")
-
-	if rl := clh.getDiskRateLimiterConfig(); rl != nil {
-		disk.SetRateLimiterConfig(*rl)
-	}
-
-	if clh.vmconfig.Disks != nil {
-		*clh.vmconfig.Disks = append(*clh.vmconfig.Disks, *disk)
-	} else {
-		clh.vmconfig.Disks = &[]chclient.DiskConfig{*disk}
-	}
-}
-
 func (clh *cloudHypervisor) hotplugAddBlockDevice(drive *config.BlockDrive) error {
 	if drive.Swap {
 		return fmt.Errorf("cloudHypervisor doesn't support swap")
@@ -944,10 +886,8 @@ func (clh *cloudHypervisor) hotplugAddBlockDevice(drive *config.BlockDrive) erro
 	}
 
 	// Create the clh disk config via the constructor to ensure default values are properly assigned
-	clhDisk := *chclient.NewDiskConfig()
-	clhDisk.Path = &drive.File
+	clhDisk := *chclient.NewDiskConfig(drive.File)
 	clhDisk.Readonly = &drive.ReadOnly
-	clhDisk.SetImageType("Raw")
 	clhDisk.VhostUser = func(b bool) *bool { return &b }(false)
 	if clh.config.BlockDeviceCacheSet {
 		clhDisk.Direct = &clh.config.BlockDeviceCacheDirect
@@ -974,44 +914,6 @@ func (clh *cloudHypervisor) hotplugAddBlockDevice(drive *config.BlockDrive) erro
 	drive.PCIPath, err = clhPciInfoToPath(pciInfo)
 
 	return err
-}
-
-// coldPlugVFIODevice appends a VFIO device to the VM configuration so that it
-// is present when the VM is created (before boot). Cloud Hypervisor's CreateVM
-// API accepts a list of devices that are attached at VM creation time, which
-// effectively provides cold-plug semantics — the guest sees the device on its
-// PCI bus from the very first enumeration.
-func (clh *cloudHypervisor) coldPlugVFIODevice(device *config.VFIODev) error {
-	switch device.Type {
-	case config.VFIOPCIDeviceNormalType, config.VFIOPCIDeviceMediatedType:
-		// Supported PCI VFIO device types for Cloud Hypervisor.
-	default:
-		return fmt.Errorf("VFIO device %+v has unsupported type %v; only PCI VFIO devices are supported in Cloud Hypervisor", device, device.Type)
-	}
-	if strings.TrimSpace(device.SysfsDev) == "" {
-		return fmt.Errorf("VFIO device %q has empty or invalid SysfsDev path", device.ID)
-	}
-
-	clh.Logger().WithFields(log.Fields{
-		"device": device.ID,
-		"sysfs":  device.SysfsDev,
-		"bdf":    device.BDF,
-	}).Info("Cold-plugging VFIO device into VM config")
-
-	clhDevice := *chclient.NewDeviceConfig(device.SysfsDev)
-	clhDevice.SetIommu(clh.config.IOMMU)
-	clhDevice.SetId(device.ID)
-
-	if clh.vmconfig.Devices != nil {
-		*clh.vmconfig.Devices = append(*clh.vmconfig.Devices, clhDevice)
-	} else {
-		clh.vmconfig.Devices = &[]chclient.DeviceConfig{clhDevice}
-	}
-
-	// Track the device ID so that it can be referenced later (e.g. for removal).
-	clh.devicesIds[device.ID] = device.ID
-
-	return nil
 }
 
 func (clh *cloudHypervisor) hotPlugVFIODevice(device *config.VFIODev) error {
@@ -1058,28 +960,7 @@ func (clh *cloudHypervisor) hotplugAddNetDevice(e Endpoint) error {
 		return err
 	}
 
-	pciInfo, err := clh.vmAddNetPut()
-
-	if err != nil || len(pciInfo) == 0 {
-		return err
-	}
-
-	// Set the pci Path for the network endpoint
-	for i, netdev := range *clh.netDevices {
-		if e.HardwareAddr() == *netdev.Mac {
-			if i >= len(pciInfo) {
-				continue
-			}
-			pciPath, err := clhPciInfoToPath(pciInfo[i])
-			if err != nil {
-				return err
-			}
-			e.SetPciPath(pciPath)
-			break
-		}
-	}
-
-	return nil
+	return clh.vmAddNetPut()
 }
 
 func (clh *cloudHypervisor) HotplugAddDevice(ctx context.Context, devInfo interface{}, devType DeviceType) (interface{}, error) {
@@ -1253,31 +1134,13 @@ func (clh *cloudHypervisor) ResizeVCPUs(ctx context.Context, reqVCPUs uint32) (c
 	defer cancel()
 	resize := *chclient.NewVmResize()
 	resize.DesiredVcpus = func(i int32) *int32 { return &i }(int32(reqVCPUs))
-
-	// Since the cloud hypervisor's resize vCPU is an asynchronous operation,
-	// it's possible that the previous resize operation hasn't completed when
-	// the request is sent, causing the current call to return an error. Therefore,
-	// several retries can be performed to avoid this error.
-	ret := retry.Do(func() error {
-
-		if _, err = cl.VmResizePut(ctx, resize); err != nil {
-			errMsg := err.Error()
-			// see https://github.com/cloud-hypervisor/cloud-hypervisor/commit/d0225fe68fd14146bacc3be26f0b7e548ce9c239
-			if !strings.Contains(errMsg, "Too Many Requests") {
-				return retry.Unrecoverable(err)
-			}
-			return errors.Wrap(err, "[clh] VmResizePut failed")
-		} else {
-			return nil
-		}
-	},
-		retry.Attempts(20),
-		retry.LastErrorOnly(true),
-		retry.Delay(20*time.Millisecond))
+	if _, err = cl.VmResizePut(ctx, resize); err != nil {
+		return currentVCPUs, newVCPUs, errors.Wrap(err, "[clh] VmResizePut failed")
+	}
 
 	newVCPUs = reqVCPUs
 
-	return currentVCPUs, newVCPUs, ret
+	return currentVCPUs, newVCPUs, nil
 }
 
 func (clh *cloudHypervisor) Cleanup(ctx context.Context) error {
@@ -1380,8 +1243,6 @@ func (clh *cloudHypervisor) AddDevice(ctx context.Context, devInfo interface{}, 
 		clh.addVSock(defaultGuestVSockCID, v.UdsPath)
 	case types.Volume:
 		err = clh.addVolume(v)
-	case config.VFIODev:
-		err = clh.coldPlugVFIODevice(&v)
 	default:
 		clh.Logger().WithField("function", "AddDevice").Warnf("Add device of type %v is not supported.", v)
 		return fmt.Errorf("Not implemented support for %s", v)
@@ -1420,7 +1281,10 @@ func (clh *cloudHypervisor) terminate(ctx context.Context, waitOnly bool) (err e
 	defer span.End()
 
 	pid := clh.state.PID
-	pidRunning := pid != 0
+	pidRunning := true
+	if pid == 0 {
+		pidRunning = false
+	}
 
 	defer func() {
 		clh.Logger().Debug("Cleanup VM")
@@ -1685,7 +1549,7 @@ func openAPIClientError(err error) error {
 	return fmt.Errorf("error: %v reason: %s", err, reason)
 }
 
-func (clh *cloudHypervisor) vmAddNetPut() ([]chclient.PciDeviceInfo, error) {
+func (clh *cloudHypervisor) vmAddNetPut() error {
 	return vmAddNetPutRequest(clh)
 }
 
@@ -1716,7 +1580,7 @@ func (clh *cloudHypervisor) bootVM(ctx context.Context) error {
 		return fmt.Errorf("VM state is not 'Created' after 'CreateVM'")
 	}
 
-	_, err = clh.vmAddNetPut()
+	err = clh.vmAddNetPut()
 	if err != nil {
 		return err
 	}
@@ -1806,10 +1670,10 @@ func (clh *cloudHypervisor) addNet(e Endpoint) error {
 		return errors.New("net Pair to be added is nil, needed to get TAP file descriptors")
 	}
 
-	if len(netPair.VMFds) == 0 {
+	if len(netPair.TapInterface.VMFds) == 0 {
 		return errors.New("The file descriptors for the network pair are not present")
 	}
-	clh.netDevicesFiles[mac] = netPair.VMFds
+	clh.netDevicesFiles[mac] = netPair.TapInterface.VMFds
 
 	netRateLimiterConfig := clh.getNetRateLimiterConfig()
 
@@ -1937,15 +1801,6 @@ func (clh *cloudHypervisor) cleanupVM(force bool) error {
 			}).Debug("successfully removed the non root user")
 	}
 
-	// If we have initdata, we should drop initdata image path
-	hypervisorConfig := clh.HypervisorConfig()
-	if len(hypervisorConfig.Initdata) > 0 {
-		initdataWorkdir := filepath.Join(string(filepath.Separator), "/run/kata-containers/shared/initdata", clh.id)
-		if err := os.RemoveAll(initdataWorkdir); err != nil {
-			clh.Logger().WithError(err).Warnf("failed to remove initdata work dir %s", initdataWorkdir)
-		}
-	}
-
 	clh.reset()
 
 	return nil
@@ -1975,12 +1830,5 @@ func (clh *cloudHypervisor) vmInfo() (chclient.VmInfo, error) {
 }
 
 func (clh *cloudHypervisor) IsRateLimiterBuiltin() bool {
-	return true
-}
-
-func pathExists(path string) bool {
-	if _, err := os.Stat(path); err != nil {
-		return false
-	}
 	return true
 }

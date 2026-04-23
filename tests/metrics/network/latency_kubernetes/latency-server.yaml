@@ -8,6 +8,7 @@ kind: Pod
 metadata:
   name: latency-server
 spec:
+  terminationGracePeriodSeconds: 0
   runtimeClassName: kata
   containers:
     - name: server-container

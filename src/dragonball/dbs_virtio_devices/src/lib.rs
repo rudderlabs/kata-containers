@@ -145,8 +145,6 @@ pub enum ActivateError {
     #[cfg(feature = "vhost")]
     #[error("Vhost activate error")]
     VhostActivate(vhost_rs::Error),
-    #[error("VirtioPci error")]
-    VirtioPci,
 }
 
 impl std::convert::From<Error> for ActivateError {
@@ -245,8 +243,8 @@ pub enum Error {
     #[error("set user memory region failed: {0}")]
     SetUserMemoryRegion(kvm_ioctls::Error),
     /// Inserting mmap region failed.
-    #[error("inserting mmap region failed")]
-    InsertMmap,
+    #[error("inserting mmap region failed: {0}")]
+    InsertMmap(vm_memory::mmap::Error),
     /// Failed to set madvise on guest memory region.
     #[error("failed to set madvice() on guest memory region")]
     Madvise(#[source] nix::Error),
@@ -439,19 +437,19 @@ pub mod tests {
             VirtqDesc { desc }
         }
 
-        pub fn addr(&self) -> VolatileRef<'_, u64> {
+        pub fn addr(&self) -> VolatileRef<u64> {
             self.desc.get_ref(offset_of!(DescriptorTmp, addr)).unwrap()
         }
 
-        pub fn len(&self) -> VolatileRef<'_, u32> {
+        pub fn len(&self) -> VolatileRef<u32> {
             self.desc.get_ref(offset_of!(DescriptorTmp, len)).unwrap()
         }
 
-        pub fn flags(&self) -> VolatileRef<'_, u16> {
+        pub fn flags(&self) -> VolatileRef<u16> {
             self.desc.get_ref(offset_of!(DescriptorTmp, flags)).unwrap()
         }
 
-        pub fn next(&self) -> VolatileRef<'_, u16> {
+        pub fn next(&self) -> VolatileRef<u16> {
             self.desc.get_ref(offset_of!(DescriptorTmp, next)).unwrap()
         }
 
@@ -513,11 +511,11 @@ pub mod tests {
             self.start.unchecked_add(self.ring.len() as GuestUsize)
         }
 
-        pub fn flags(&self) -> VolatileRef<'_, u16> {
+        pub fn flags(&self) -> VolatileRef<u16> {
             self.ring.get_ref(0).unwrap()
         }
 
-        pub fn idx(&self) -> VolatileRef<'_, u16> {
+        pub fn idx(&self) -> VolatileRef<u16> {
             self.ring.get_ref(2).unwrap()
         }
 
@@ -525,12 +523,12 @@ pub mod tests {
             4 + mem::size_of::<T>() * (i as usize)
         }
 
-        pub fn ring(&self, i: u16) -> VolatileRef<'_, T> {
+        pub fn ring(&self, i: u16) -> VolatileRef<T> {
             assert!(i < self.qsize);
             self.ring.get_ref(Self::ring_offset(i)).unwrap()
         }
 
-        pub fn event(&self) -> VolatileRef<'_, u16> {
+        pub fn event(&self) -> VolatileRef<u16> {
             self.ring.get_ref(Self::ring_offset(self.qsize)).unwrap()
         }
 
@@ -602,7 +600,7 @@ pub mod tests {
             (self.dtable.len() / VirtqDesc::dtable_len(1)) as u16
         }
 
-        pub fn dtable(&self, i: u16) -> VirtqDesc<'_> {
+        pub fn dtable(&self, i: u16) -> VirtqDesc {
             VirtqDesc::new(&self.dtable, i)
         }
 

@@ -34,13 +34,13 @@ import (
 
 const (
 	DirectVolumePathKey   = "path"
-	AgentURL              = "/agent-url"
-	DirectVolumeStatURL   = "/direct-volume/stats"
-	DirectVolumeResizeURL = "/direct-volume/resize"
-	IPTablesURL           = "/iptables"
-	PolicyURL             = "/policy"
-	IP6TablesURL          = "/ip6tables"
-	MetricsURL            = "/metrics"
+	AgentUrl              = "/agent-url"
+	DirectVolumeStatUrl   = "/direct-volume/stats"
+	DirectVolumeResizeUrl = "/direct-volume/resize"
+	IPTablesUrl           = "/iptables"
+	PolicyUrl             = "/policy"
+	IP6TablesUrl          = "/ip6tables"
+	MetricsUrl            = "/metrics"
 )
 
 var (
@@ -81,7 +81,7 @@ func (s *service) serveMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// encode the metrics
-	encoder := expfmt.NewEncoder(w, expfmt.NewFormat(expfmt.TypeTextPlain))
+	encoder := expfmt.NewEncoder(w, expfmt.FmtText)
 	for _, mf := range mfs {
 		encoder.Encode(mf)
 	}
@@ -120,7 +120,7 @@ func (s *service) serveMetrics(w http.ResponseWriter, r *http.Request) {
 func decodeAgentMetrics(body string) []*dto.MetricFamily {
 	// decode agent metrics
 	reader := strings.NewReader(body)
-	decoder := expfmt.NewDecoder(reader, expfmt.NewFormat(expfmt.TypeTextPlain))
+	decoder := expfmt.NewDecoder(reader, expfmt.FmtText)
 	list := make([]*dto.MetricFamily, 0)
 
 	for {
@@ -288,13 +288,13 @@ func (s *service) startManagementServer(ctx context.Context, ociSpec *specs.Spec
 
 	// bind handler
 	m := http.NewServeMux()
-	m.Handle(MetricsURL, http.HandlerFunc(s.serveMetrics))
-	m.Handle(AgentURL, http.HandlerFunc(s.agentURL))
-	m.Handle(DirectVolumeStatURL, http.HandlerFunc(s.serveVolumeStats))
-	m.Handle(DirectVolumeResizeURL, http.HandlerFunc(s.serveVolumeResize))
-	m.Handle(IPTablesURL, http.HandlerFunc(s.ipTablesHandler))
-	m.Handle(PolicyURL, http.HandlerFunc(s.policyHandler))
-	m.Handle(IP6TablesURL, http.HandlerFunc(s.ip6TablesHandler))
+	m.Handle(MetricsUrl, http.HandlerFunc(s.serveMetrics))
+	m.Handle(AgentUrl, http.HandlerFunc(s.agentURL))
+	m.Handle(DirectVolumeStatUrl, http.HandlerFunc(s.serveVolumeStats))
+	m.Handle(DirectVolumeResizeUrl, http.HandlerFunc(s.serveVolumeResize))
+	m.Handle(IPTablesUrl, http.HandlerFunc(s.ipTablesHandler))
+	m.Handle(PolicyUrl, http.HandlerFunc(s.policyHandler))
+	m.Handle(IP6TablesUrl, http.HandlerFunc(s.ip6TablesHandler))
 	s.mountPprofHandle(m, ociSpec)
 
 	// register shim metrics
@@ -373,7 +373,7 @@ func ClientSocketAddress(id string) (string, error) {
 	if _, err := os.Stat(socketPath); err != nil {
 		socketPath = SocketPathRust(id)
 		if _, err := os.Stat(socketPath); err != nil {
-			return "", fmt.Errorf("it fails to stat both %s and %s with error %v", SocketPathGo(id), SocketPathRust(id), err)
+			return "", fmt.Errorf("It fails to stat both %s and %s with error %v.", SocketPathGo(id), SocketPathRust(id), err)
 		}
 	}
 

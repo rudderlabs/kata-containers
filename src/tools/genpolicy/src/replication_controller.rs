@@ -54,10 +54,7 @@ impl yaml::K8sResource for ReplicationController {
     }
 
     fn get_sandbox_name(&self) -> Option<String> {
-        // https://github.com/kubernetes/kubernetes/blob/b35c5c0a301d326fdfa353943fca077778544ac6/pkg/controller/controller_utils.go#L541
-        // https://github.com/kubernetes/kubernetes/blob/b35c5c0a301d326fdfa353943fca077778544ac6/pkg/controller/replication/replication_controller.go#L47-L50
-        let suffix = yaml::GENERATE_NAME_SUFFIX_REGEX;
-        yaml::name_regex_from_meta(&self.metadata).map(|prefix| format!("{prefix}-{suffix}"))
+        None
     }
 
     fn get_namespace(&self) -> Option<String> {
@@ -76,12 +73,12 @@ impl yaml::K8sResource for ReplicationController {
             storages,
             container,
             settings,
-            &self.spec.template.spec,
+            &self.spec.template.spec.volumes,
         );
     }
 
-    fn generate_initdata_anno(&self, agent_policy: &policy::AgentPolicy) -> String {
-        agent_policy.generate_initdata_anno(self)
+    fn generate_policy(&self, agent_policy: &policy::AgentPolicy) -> String {
+        agent_policy.generate_policy(self)
     }
 
     fn serialize(&mut self, policy: &str) -> String {
@@ -114,25 +111,15 @@ impl yaml::K8sResource for ReplicationController {
         false
     }
 
-    fn get_process_fields(
-        &self,
-        process: &mut policy::KataProcess,
-        must_check_passwd: &mut bool,
-        is_pause_container: bool,
-    ) {
+    fn get_process_fields(&self, process: &mut policy::KataProcess, must_check_passwd: &mut bool) {
         yaml::get_process_fields(
             process,
-            must_check_passwd,
-            is_pause_container,
             &self.spec.template.spec.securityContext,
+            must_check_passwd,
         );
     }
 
     fn get_sysctls(&self) -> Vec<pod::Sysctl> {
         yaml::get_sysctls(&self.spec.template.spec.securityContext)
-    }
-
-    fn get_pod_security_context(&self) -> Option<&pod::PodSecurityContext> {
-        self.spec.template.spec.securityContext.as_ref()
     }
 }

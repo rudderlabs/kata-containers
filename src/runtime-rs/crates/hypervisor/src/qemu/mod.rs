@@ -58,10 +58,9 @@ impl Hypervisor for Qemu {
         id: &str,
         netns: Option<String>,
         _annotations: &HashMap<String, String>,
-        selinux_label: Option<String>,
     ) -> Result<()> {
         let mut inner = self.inner.write().await;
-        inner.prepare_vm(id, netns, selinux_label).await
+        inner.prepare_vm(id, netns).await
     }
 
     async fn start_vm(&self, timeout: i32) -> Result<()> {
@@ -91,17 +90,17 @@ impl Hypervisor for Qemu {
     }
 
     async fn pause_vm(&self) -> Result<()> {
-        let mut inner = self.inner.write().await;
+        let inner = self.inner.read().await;
         inner.pause_vm()
     }
 
     async fn resume_vm(&self) -> Result<()> {
-        let mut inner = self.inner.write().await;
+        let inner = self.inner.read().await;
         inner.resume_vm()
     }
 
     async fn save_vm(&self) -> Result<()> {
-        let mut inner = self.inner.write().await;
+        let inner = self.inner.read().await;
         inner.save_vm().await
     }
 
@@ -136,7 +135,7 @@ impl Hypervisor for Qemu {
     }
 
     async fn get_thread_ids(&self) -> Result<VcpuThreadIds> {
-        let mut inner = self.inner.write().await;
+        let inner = self.inner.read().await;
         inner.get_thread_ids().await
     }
 

@@ -160,24 +160,6 @@ paths:
           description: The VM instance was successfully resized.
         404:
           description: The VM instance could not be resized because it is not created.
-        429:
-          description: The VM instance could not be resized because a cpu removal is still pending.
-
-  /vm.resize-disk:
-    put:
-      summary: Resize a disk
-      requestBody:
-        description: Resizes a disk attached to the VM
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/VmResizeDisk"
-        required: true
-      responses:
-        204:
-          description: The disk was successfully resized.
-        500:
-          description: The disk could not be resized.
 
   /vm.resize-zone:
     put:
@@ -623,6 +605,10 @@ components:
             $ref: "#/components/schemas/VdpaConfig"
         vsock:
           $ref: "#/components/schemas/VsockConfig"
+        sgx_epc:
+          type: array
+          items:
+            $ref: "#/components/schemas/SgxEpcConfig"
         numa:
           type: array
           items:
@@ -703,9 +689,6 @@ components:
           default: false
         max_phys_bits:
           type: integer
-        nested:
-          type: boolean
-          default: true
         affinity:
           type: array
           items:
@@ -902,6 +885,8 @@ components:
             type: integer
 
     DiskConfig:
+      required:
+        - path
       type: object
       properties:
         path:
@@ -941,16 +926,6 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/VirtQueueAffinity"
-        backing_files:
-          type: boolean
-          default: false
-        sparse:
-          type: boolean
-          default: true
-        image_type:
-          type: string
-          enum: [FixedVhd, Qcow2, Raw, Vhdx, Unknown]
-
 
     NetConfig:
       type: object
@@ -960,11 +935,9 @@ components:
         ip:
           type: string
           default: "192.168.249.1"
-          description: IPv4 or IPv6 address
         mask:
           type: string
           default: "255.255.255.0"
-          description: Must be a valid IPv4 netmask if ip is an IPv4 address or a valid IPv6 netmask if ip is an IPv6 address.
         mac:
           type: string
         host_mac:
@@ -995,15 +968,6 @@ components:
           format: int16
         rate_limiter_config:
           $ref: "#/components/schemas/RateLimiterConfig"
-        offload_tso:
-          type: boolean
-          default: true
-        offload_ufo:
-          type: boolean
-          default: true
-        offload_csum:
-          type: boolean
-          default: true
 
     RngConfig:
       required:
@@ -1177,6 +1141,21 @@ components:
         id:
           type: string
 
+    SgxEpcConfig:
+      required:
+        - id
+        - size
+      type: object
+      properties:
+        id:
+          type: string
+        size:
+          type: integer
+          format: int64
+        prefault:
+          type: boolean
+          default: false
+
     NumaDistance:
       required:
         - destination
@@ -1211,13 +1190,15 @@ components:
           type: array
           items:
             type: string
+        sgx_epc_sections:
+          type: array
+          items:
+            type: string
         pci_segments:
           type: array
           items:
             type: integer
             format: int32
-        device_id:
-          type: string
 
     VmResize:
       type: object
@@ -1231,17 +1212,6 @@ components:
           format: int64
         desired_balloon:
           description: desired balloon size in bytes
-          type: integer
-          format: int64
-
-    VmResizeDisk:
-      type: object
-      properties:
-        id:
-          description: disk identifier
-          type: string
-        desired_size:
-          description: desired disk size in bytes
           type: integer
           format: int64
 

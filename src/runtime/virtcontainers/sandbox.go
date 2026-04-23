@@ -20,7 +20,6 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-	"time"
 
 	v1 "github.com/containerd/cgroups/stats/v1"
 	v2 "github.com/containerd/cgroups/v2/stats"
@@ -35,7 +34,6 @@ import (
 	"github.com/kata-containers/kata-containers/src/runtime/pkg/device/config"
 	"github.com/kata-containers/kata-containers/src/runtime/pkg/device/drivers"
 	deviceManager "github.com/kata-containers/kata-containers/src/runtime/pkg/device/manager"
-	volume "github.com/kata-containers/kata-containers/src/runtime/pkg/direct-volume"
 	"github.com/kata-containers/kata-containers/src/runtime/pkg/katautils/katatrace"
 	resCtrl "github.com/kata-containers/kata-containers/src/runtime/pkg/resourcecontrol"
 	exp "github.com/kata-containers/kata-containers/src/runtime/virtcontainers/experimental"
@@ -110,7 +108,6 @@ type SandboxStatus struct {
 	ContainersStatus []ContainerStatus
 	State            types.SandboxState
 	HypervisorConfig HypervisorConfig
-	EmptyDirMode     string
 }
 
 // SandboxStats describes a sandbox's stats
@@ -183,10 +180,6 @@ type SandboxConfig struct {
 	// DisableGuestSeccomp disable seccomp within the guest
 	DisableGuestSeccomp bool
 
-	// EmptyDirMode specifies how Kubernetes emptyDir volumes are handled.
-	// Valid values are "shared-fs" (default) or "block-encrypted".
-	EmptyDirMode string
-
 	// EnableVCPUsPinning controls whether each vCPU thread should be scheduled to a fixed CPU
 	EnableVCPUsPinning bool
 
@@ -196,11 +189,6 @@ type SandboxConfig struct {
 
 	// ForceGuestPull enforces guest pull independent of snapshotter annotations.
 	ForceGuestPull bool
-
-	// KubeletRootDir is the kubelet root directory (e.g. /var/lib/kubelet or
-	// /var/lib/k0s/kubelet for k0s). If empty, the runtime uses the default
-	// /var/lib/kubelet for matching ConfigMap/Secret volume paths.
-	KubeletRootDir string
 }
 
 // valid checks that the sandbox configuration is valid.
@@ -233,9 +221,8 @@ type Sandbox struct {
 	store      persistapi.PersistDriver
 	fsShare    FilesystemSharer
 
-	swapDevices    []*config.BlockDrive
-	volumes        []types.Volume
-	ephemeralDisks []EphemeralDisk
+	swapDevices []*config.BlockDrive
+	volumes     []types.Volume
 
 	monitor         *monitor
 	config          *SandboxConfig
@@ -331,81 +318,6 @@ func (s *Sandbox) GetHypervisorPid() (int, error) {
 	return pids[0], nil
 }
 
-// RescanNetwork re-scans the network namespace for endpoints if none have
-// been discovered yet. This is idempotent: if endpoints already exist it
-// returns immediately. It enables Docker 26+ support where networking is
-// configured after task creation but before Start.
-//
-// Docker 26+ configures networking (veth pair, IP addresses) between
-// Create and Start. The interfaces may not be present immediately, so
-// this method polls until they appear or a timeout is reached.
-//
-// When new endpoints are found, the guest agent is informed about the
-// interfaces and routes so that networking becomes functional inside the VM.
-func (s *Sandbox) RescanNetwork(ctx context.Context) error {
-	if s.config.NetworkConfig.DisableNewNetwork {
-		return nil
-	}
-	if len(s.network.Endpoints()) > 0 {
-		return nil
-	}
-
-	const maxWait = 5 * time.Second
-	const pollInterval = 50 * time.Millisecond
-	deadline := time.NewTimer(maxWait)
-	defer deadline.Stop()
-	ticker := time.NewTicker(pollInterval)
-	defer ticker.Stop()
-
-	s.Logger().Debug("waiting for network interfaces in namespace")
-
-	for {
-		if _, err := s.network.AddEndpoints(ctx, s, nil, true); err != nil {
-			return err
-		}
-		if len(s.network.Endpoints()) > 0 {
-			return s.configureGuestNetwork(ctx)
-		}
-
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-deadline.C:
-			s.Logger().Warn("no network interfaces found after timeout — networking may be configured by prestart hooks")
-			return nil
-		case <-ticker.C:
-		}
-	}
-}
-
-// configureGuestNetwork informs the guest agent about discovered network
-// endpoints so that interfaces and routes become functional inside the VM.
-func (s *Sandbox) configureGuestNetwork(ctx context.Context) error {
-	endpoints := s.network.Endpoints()
-	s.Logger().WithField("endpoints", len(endpoints)).Info("configuring hotplugged network in guest")
-
-	// Note: ARP neighbors (3rd return value) are not propagated here
-	// because the agent interface only exposes per-entry updates. The
-	// full setupNetworks path in kataAgent handles them; this path is
-	// only reached for late-discovered endpoints where neighbor entries
-	// are populated dynamically by the kernel.
-	interfaces, routes, _, err := generateVCNetworkStructures(ctx, endpoints)
-	if err != nil {
-		return fmt.Errorf("generating network structures: %w", err)
-	}
-	for _, ifc := range interfaces {
-		if _, err := s.agent.updateInterface(ctx, ifc); err != nil {
-			return fmt.Errorf("updating interface %s in guest: %w", ifc.Name, err)
-		}
-	}
-	if len(routes) > 0 {
-		if _, err := s.agent.updateRoutes(ctx, routes); err != nil {
-			return fmt.Errorf("updating routes in guest: %w", err)
-		}
-	}
-	return nil
-}
-
 // GetAllContainers returns all containers.
 func (s *Sandbox) GetAllContainers() []VCContainer {
 	ifa := make([]VCContainer, len(s.containers))
@@ -464,7 +376,6 @@ func (s *Sandbox) Status() SandboxStatus {
 		HypervisorConfig: s.config.HypervisorConfig,
 		ContainersStatus: contStatusList,
 		Annotations:      s.config.Annotations,
-		EmptyDirMode:     s.config.EmptyDirMode,
 	}
 }
 
@@ -954,12 +865,7 @@ func (s *Sandbox) createResourceController() error {
 	// Depending on the SandboxCgroupOnly value, this cgroup
 	// will either hold all the pod threads (SandboxCgroupOnly is true)
 	// or only the virtual CPU ones (SandboxCgroupOnly is false).
-	s.sandboxController, err = resCtrl.NewSandboxResourceController(
-		cgroupPath,
-		&resources,
-		s.config.SandboxCgroupOnly,
-		s.config.HypervisorType != RemoteHypervisor,
-	)
+	s.sandboxController, err = resCtrl.NewSandboxResourceController(cgroupPath, &resources, s.config.SandboxCgroupOnly)
 	if err != nil {
 		return fmt.Errorf("Could not create the sandbox resource controller %v", err)
 	}
@@ -1082,29 +988,7 @@ func (s *Sandbox) Delete(ctx context.Context) error {
 		s.Logger().WithError(err).Error("failed to cleanup share files")
 	}
 
-	if err := s.cleanupEphemeralDisks(); err != nil {
-		s.Logger().WithError(err).Error("failed to cleanup ephemeral disks")
-	}
-
 	return s.store.Destroy(s.id)
-}
-
-// cleanupEphemeralDisks removes ephemeral disk images and their mount info.
-func (s *Sandbox) cleanupEphemeralDisks() error {
-	if s.config.EmptyDirMode != EmptyDirModeVirtioBlkEncrypted {
-		return nil
-	}
-
-	for _, disk := range s.ephemeralDisks {
-		if err := os.Remove(disk.DiskPath); err != nil && !os.IsNotExist(err) {
-			s.Logger().WithError(err).Errorf("Failed to remove disk file: %s", disk.DiskPath)
-		}
-		if err := volume.Remove(disk.SourcePath); err != nil && !os.IsNotExist(err) {
-			s.Logger().WithError(err).Errorf("Failed to remove volume: %s", disk.SourcePath)
-		}
-	}
-
-	return nil
 }
 
 func (s *Sandbox) createNetwork(ctx context.Context) error {
@@ -1531,13 +1415,6 @@ func (s *Sandbox) startVM(ctx context.Context, prestartHookFunc func(context.Con
 		if err != nil {
 			return err
 		}
-		// If we want the network, scan the netns again to update the network
-		// configuration after the prestart hooks have run.
-		if !s.config.NetworkConfig.DisableNewNetwork {
-			if _, err := s.network.AddEndpoints(ctx, s, nil, false); err != nil {
-				return err
-			}
-		}
 	}
 
 	if err := s.network.Run(ctx, func() error {
@@ -1685,7 +1562,7 @@ func (s *Sandbox) CreateContainer(ctx context.Context, contConfig ContainerConfi
 
 	// Sandbox is responsible to update VM resources needed by Containers
 	// Update resources after having added containers to the sandbox, since
-	// container status is required to know if more resources should be added.
+	// container status is requiered to know if more resources should be added.
 	if err = s.updateResources(ctx); err != nil {
 		return nil, err
 	}
@@ -2668,15 +2545,8 @@ func (s *Sandbox) resourceControllerDelete() error {
 		return err
 	}
 
-	// When sandbox_cgroup_only is enabled, all Kata threads live in the
-	// sandbox controller and systemd can move tasks as part of unit deletion.
-	// In that mode, a systemd-formatted cgroup path is not a filesystem path,
-	// so MoveTo would fail with "invalid group path".
-	// Keep MoveTo for the case of using cgroupfs paths and for the
-	// non-sandbox_cgroup_only mode. In that mode, Kata may use an overhead
-	// cgroup in which case an explicit MoveTo is used to drain tasks.
-	if !resCtrl.IsSystemdCgroup(s.state.SandboxCgroupPath) || !s.config.SandboxCgroupOnly {
-		resCtrlParent := sandboxController.Parent()
+	resCtrlParent := sandboxController.Parent()
+	if resCtrlParent != "." {
 		if err := sandboxController.MoveTo(resCtrlParent); err != nil {
 			return err
 		}
@@ -2692,12 +2562,9 @@ func (s *Sandbox) resourceControllerDelete() error {
 			return err
 		}
 
-		// See comment at above MoveTo: Avoid this action as systemd moves tasks on unit deletion.
-		if !resCtrl.IsSystemdCgroup(s.state.OverheadCgroupPath) || !s.config.SandboxCgroupOnly {
-			resCtrlParent := overheadController.Parent()
-			if err := s.overheadController.MoveTo(resCtrlParent); err != nil {
-				return err
-			}
+		resCtrlParent := overheadController.Parent()
+		if err := s.overheadController.MoveTo(resCtrlParent); err != nil {
+			return err
 		}
 
 		if err := overheadController.Delete(); err != nil {

@@ -18,17 +18,41 @@ image = "@IMAGEPATH@"
 #   - ext4 (default)
 #   - xfs
 #   - erofs
-rootfs_type = @DEFROOTFSTYPE@
-
+rootfs_type=@DEFROOTFSTYPE@
+ 
 # Block storage driver to be used for the VM rootfs is backed
 # by a block device.
-#
-# virtio-pmem is not supported with Cloud Hypervisor.
 vm_rootfs_driver = "@VMROOTFSDRIVER_CLH@"
+
+# Enable confidential guest support.
+# Toggling that setting may trigger different hardware features, ranging
+# from memory encryption to both memory and CPU-state encryption and integrity.
+# The Kata Containers runtime dynamically detects the available feature set and
+# aims at enabling the largest possible one, returning an error if none is
+# available, or none is supported by the hypervisor.
+#
+# Known limitations:
+# * Does not work by design:
+#   - CPU Hotplug 
+#   - Memory Hotplug
+#   - NVDIMM devices
+#
+# Supported TEEs:
+# * Intel TDX
+#
+# Default false
+# confidential_guest = true
 
 # Path to the firmware.
 # If you want Cloud Hypervisor to use a specific firmware, set its path below.
-firmware = "@FIRMWAREPATH@"
+# This is option is only used when confidential_guest is enabled.
+#
+# For more information about firmwared that can be used with specific TEEs,
+# please, refer to:
+# * Intel TDX:
+#   - td-shim: https://github.com/confidential-containers/td-shim
+#
+# firmware = "@FIRMWAREPATH@"
 
 # List of valid annotation names for the hypervisor
 # Each member of the list is a regular expression, which is the base name
@@ -43,8 +67,8 @@ valid_hypervisor_paths = @CLHVALIDHYPERVISORPATHS@
 
 # List of valid annotations values for ctlpath
 # The default if not set is empty (all annotations rejected.)
-# Your distribution recommends:
-valid_ctlpaths = []
+# Your distribution recommends: 
+# valid_ctlpaths = 
 
 # Optional space-separated list of options to pass to the guest kernel.
 # For example, use `kernel_params = "vsyscall=emulate"` if you are having
@@ -142,7 +166,7 @@ default_bridges = @DEFBRIDGES@
 # the VM.
 #
 # Default false
-reclaim_guest_freed_memory = false
+#reclaim_guest_freed_memory = true
 
 # Block device driver to be used by the hypervisor when a container's storage
 # is backed by a block device or a file. This driver facilitates attaching the
@@ -152,52 +176,7 @@ block_device_driver = "virtio-blk-pci"
 # Specifies cache-related options for block devices.
 # Denotes whether use of O_DIRECT (bypass the host page cache) is enabled.
 # Default false
-block_device_cache_direct = false
-
-# Bandwidth rate limiter options
-#
-# disk_rate_limiter_bw_max_rate controls disk I/O bandwidth (size in bits/sec
-# for SB/VM).
-# The same value is used for inbound and outbound bandwidth.
-# Default 0-sized value means unlimited rate.
-disk_rate_limiter_bw_max_rate = 0
-
-# disk_rate_limiter_bw_one_time_burst increases the initial max rate and this
-# initial extra credit does *NOT* affect the overall limit and can be used for
-# an *initial* burst of data.
-# This is *optional* and only takes effect if disk_rate_limiter_bw_max_rate is
-# set to a non zero value.
-disk_rate_limiter_bw_one_time_burst = 0
-
-# Operation rate limiter options
-#
-# disk_rate_limiter_ops_max_rate controls disk I/O bandwidth (size in ops/sec
-# for SB/VM).
-# The same value is used for inbound and outbound bandwidth.
-# Default 0-sized value means unlimited rate.
-disk_rate_limiter_ops_max_rate = 0
-
-# disk_rate_limiter_ops_one_time_burst increases the initial max rate and this
-# initial extra credit does *NOT* affect the overall limit and can be used for
-# an *initial* burst of data.
-# This is *optional* and only takes effect if disk_rate_limiter_bw_max_rate is
-# set to a non zero value.
-disk_rate_limiter_ops_one_time_burst = 0
-
-# Virtio queue size. Size: byte. default 128
-queue_size = 128
-
-# Block device multi-queue, default 1
-num_queues = 1
-
-# network_queues configures the number of virtio-net queue pairs (RX/TX) exposed to the guest.
-# Setting network_queues = N creates N RX queues and N TX queues (i.e., N queue pairs).
-# More queues can improve network throughput and reduce per-queue contention by allowing packet processing to scale
-# across multiple vCPUs/threads (subject to host/guest capabilities and backend configuration such as vhost-net).
-# Increasing this value consumes more resources (e.g., virtqueue state, interrupts/MSI-X vectors, backend threads),
-# so it should typically not exceed the number of vCPUs or the practical parallelism of the networking backend.
-# Default: 1, Range: 1..=256
-network_queues = @DEFNETQUEUES@
+#block_device_cache_direct = true
 
 # Enable pre allocation of VM RAM, default false
 # Enabling this will result in lower container density
@@ -206,7 +185,7 @@ network_queues = @DEFNETQUEUES@
 # upfront or in the cases where you want memory latencies
 # to be very predictable
 # Default false
-enable_mem_prealloc = false
+#enable_mem_prealloc = true
 
 # Enable huge pages for VM RAM, default false
 # Enabling this will result in the VM memory
@@ -214,27 +193,19 @@ enable_mem_prealloc = false
 # This is useful when you want to use vhost-user network
 # stacks within the container. This will automatically
 # result in memory pre allocation
-enable_hugepages = false
-
-# Enable running clh VMM as a non-root user.
-# By default clh VMM run as root. When this is set to true, clh VMM process runs as
-# a non-root random user. See documentation for the limitations of this mode.
-rootless = false
-
-# Disable the 'seccomp' feature from Cloud Hypervisor, firecracker or dragonball, default false
-disable_seccomp = false
+#enable_hugepages = true
 
 # This option changes the default hypervisor and kernel parameters
 # to enable debug output where available.
 #
 # Default false
-enable_debug = false
+#enable_debug = true
 
 # Disable the customizations done in the runtime when it detects
 # that it is running on top a VMM. This will result in the runtime
 # behaving as it would when running on bare metal.
 #
-disable_nesting_checks = false
+#disable_nesting_checks = true
 
 # Path to OCI hook binaries in the *guest rootfs*.
 # This does not affect host-side hooks which must instead be added to
@@ -251,31 +222,30 @@ disable_nesting_checks = false
 # https://github.com/opencontainers/runtime-spec/blob/v1.0.1/config.md#posix-platform-hooks
 # Warnings will be logged if any error is encountered while scanning for hooks,
 # but it will not abort container execution.
-# Recommended value when enabling: "/usr/share/oci/hooks"
-guest_hook_path = ""
+#guest_hook_path = "/usr/share/oci/hooks"
 
 # Enable swap in the guest. Default false.
 # When enable_guest_swap is enabled, insert a raw file to the guest as the swap device.
-enable_guest_swap = false
+#enable_guest_swap = true
 
 # If enable_guest_swap is enabled, the swap device will be created in the guest
 # at this path. Default "/run/kata-containers/swap".
-guest_swap_path = "/run/kata-containers/swap"
+#guest_swap_path = "/run/kata-containers/swap"
 
 # The percentage of the total memory to be used as swap device.
 # Default 100.
-guest_swap_size_percent = 100
+#guest_swap_size_percent = 100
 
 # The threshold in seconds to create swap device in the guest.
 # Kata will wait guest_swap_create_threshold_secs seconds before creating swap device.
 # Default 60.
-guest_swap_create_threshold_secs = 60
+#guest_swap_create_threshold_secs = 60
 
 [agent.@PROJECT_TYPE@]
-container_pipe_size = @PIPESIZE@
+container_pipe_size=@PIPESIZE@
 # If enabled, make the agent display debug-level messages.
 # (default: disabled)
-enable_debug = false
+#enable_debug = true
 
 # Enable agent tracing.
 #
@@ -289,18 +259,18 @@ enable_debug = false
 #   increasing the container shutdown time slightly.
 #
 # (default: disabled)
-enable_tracing = false
+#enable_tracing = true
 
 # Enable debug console.
 
 # If enabled, user can connect guest OS running inside hypervisor
 # through "kata-runtime exec <sandbox-id>" command
 
-debug_console_enabled = false
+#debug_console_enabled = true
 
 # Agent dial timeout in millisecond.
 # (default: 10)
-dial_timeout_ms = 10
+#dial_timeout_ms = 10
 
 # Agent reconnect timeout in millisecond.
 # Retry times = reconnect_timeout_ms / dial_timeout_ms (default: 300)
@@ -309,28 +279,28 @@ dial_timeout_ms = 10
 # You'd better not change the value of dial_timeout_ms, unless you have an
 # idea of what you are doing.
 # (default: 3000)
-reconnect_timeout_ms = 3000
+#reconnect_timeout_ms = 3000
 
 [agent.@PROJECT_TYPE@.mem_agent]
 # Control the mem-agent function enable or disable.
 # Default to false
-mem_agent_enable = false
+#mem_agent_enable = true
 
 # Control the mem-agent memcg function disable or enable
 # Default to false
-memcg_disable = false
+#memcg_disable = false
 
 # Control the mem-agent function swap enable or disable.
 # Default to false
-memcg_swap = false
+#memcg_swap = false
 
 # Control the mem-agent function swappiness max number.
 # Default to 50
-memcg_swappiness_max = 50
+#memcg_swappiness_max = 50
 
 # Control the mem-agent memcg function wait period seconds
 # Default to 600
-memcg_period_secs = 600
+#memcg_period_secs = 600
 
 # Control the mem-agent memcg wait period PSI percent limit.
 # If the percentage of memory and IO PSI stall time within
@@ -338,7 +308,7 @@ memcg_period_secs = 600
 # then the aging and eviction for this cgroup will not be
 # executed after this waiting period.
 # Default to 1
-memcg_period_psi_percent_limit = 1
+#memcg_period_psi_percent_limit = 1
 
 # Control the mem-agent memcg eviction PSI percent limit.
 # If the percentage of memory and IO PSI stall time for a cgroup
@@ -346,44 +316,44 @@ memcg_period_psi_percent_limit = 1
 # this cgroup will immediately stop and will not resume until
 # the next memcg waiting period.
 # Default to 1
-memcg_eviction_psi_percent_limit = 1
+#memcg_eviction_psi_percent_limit = 1
 
 # Control the mem-agent memcg eviction run aging count min.
 # A cgroup will only perform eviction when the number of aging cycles
 # in memcg is greater than or equal to memcg_eviction_run_aging_count_min.
 # Default to 3
-memcg_eviction_run_aging_count_min = 3
+#memcg_eviction_run_aging_count_min = 3
 
 # Control the mem-agent compact function disable or enable
 # Default to false
-compact_disable = false
+#compact_disable = false
 
 # Control the mem-agent compaction function wait period seconds
 # Default to 600
-compact_period_secs = 600
+#compact_period_secs = 600
 
 # Control the mem-agent compaction function wait period PSI percent limit.
 # If the percentage of memory and IO PSI stall time within
 # the compaction waiting period exceeds this value,
 # then the compaction will not be executed after this waiting period.
 # Default to 1
-compact_period_psi_percent_limit = 1
+#compact_period_psi_percent_limit = 1
 
 # Control the mem-agent compaction function compact PSI percent limit.
 # During compaction, the percentage of memory and IO PSI stall time
 # is checked every second. If this percentage exceeds
 # compact_psi_percent_limit, the compaction process will stop.
 # Default to 5
-compact_psi_percent_limit = 5
+#compact_psi_percent_limit = 5
 
 # Control the maximum number of seconds for each compaction of mem-agent compact function.
-# Default to 300
-compact_sec_max = 300
+# Default to 180
+#compact_sec_max = 180
 
 # Control the mem-agent compaction function compact order.
 # compact_order is use with compact_threshold.
 # Default to 9
-compact_order = 9
+#compact_order = 9
 
 # Control the mem-agent compaction function compact threshold.
 # compact_threshold is the pages number.
@@ -396,7 +366,7 @@ compact_order = 9
 # since the previous compaction.
 # then the system should initiate another round of memory compaction.
 # Default to 1024
-compact_threshold = 1024
+#compact_threshold = 1024
 
 # Control the mem-agent compaction function force compact times.
 # After one compaction, if there has not been a compaction within
@@ -405,9 +375,7 @@ compact_threshold = 1024
 # If compact_force_times is set to 0, will do force compaction each time.
 # If compact_force_times is set to 18446744073709551615, will never do force compaction.
 # Default to 18446744073709551615
-# Note: Using a large but valid u64 value (within i64::MAX range) instead of u64::MAX to avoid TOML parser issues
-# Using 9223372036854775807 (i64::MAX) which is effectively "never" for practical purposes
-compact_force_times = 9223372036854775807
+#compact_force_times = 18446744073709551615
 
 # Create Container Request Timeout
 # This timeout value is used to set the maximum duration for the agent to process a CreateContainerRequest.
@@ -416,24 +384,24 @@ compact_force_times = 9223372036854775807
 #
 # Effective Timeout Determination:
 # The effective timeout for a CreateContainerRequest is determined by taking the minimum of the following two values:
-# - create_container_timeout: The timeout value configured for creating containers (default: 30 seconds).
+# - create_container_timeout: The timeout value configured for creating containers (default: 30,000 milliseconds).
 # - runtime-request-timeout: The timeout value specified in the Kubelet configuration described as the link below:
 # (https://kubernetes.io/docs/reference/command-line-tools-reference/kubelet/#:~:text=runtime%2Drequest%2Dtimeout)
 # Defaults to @DEFCREATECONTAINERTIMEOUT@ second(s)
-create_container_timeout = @DEFCREATECONTAINERTIMEOUT@
+# create_container_timeout = @DEFCREATECONTAINERTIMEOUT@
 
 [runtime]
 # If enabled, the runtime will log additional debug messages to the
 # system log
 # (default: disabled)
-enable_debug = false
+#enable_debug = true
 
 # If enabled, enabled, it means that 1) if the runtime exits abnormally,
 # the cleanup process will be skipped, and 2) the runtime will not exit
 # even if the health check fails.
 # This option is typically used to retain abnormal information for debugging.
 # (default: false)
-keep_abnormal = false
+#keep_abnormal = true
 
 # Internetworking model
 # Determines how the VM should be connected to the
@@ -458,33 +426,33 @@ keep_abnormal = false
 #     Uses tc filter rules to redirect traffic from the network interface
 #     provided by plugin to a tap interface connected to the VM.
 #
-internetworking_model = "@DEFNETWORKMODEL_CLH@"
+internetworking_model="@DEFNETWORKMODEL_CLH@"
 
-name = "@RUNTIMENAME@"
-hypervisor_name = "@HYPERVISOR_CLH@"
-agent_name = "@PROJECT_TYPE@"
+name="@RUNTIMENAME@"
+hypervisor_name="@HYPERVISOR_CLH@"
+agent_name="@PROJECT_TYPE@"
 
 # disable guest seccomp
 # Determines whether container seccomp profiles are passed to the virtual
 # machine and applied by the kata agent. If set to true, seccomp is not applied
 # within the guest
 # (default: true)
-disable_guest_seccomp = @DEFDISABLEGUESTSECCOMP@
+disable_guest_seccomp=@DEFDISABLEGUESTSECCOMP@
 
 # If enabled, the runtime will create opentracing.io traces and spans.
 # (See https://www.jaegertracing.io/docs/getting-started).
 # (default: disabled)
-enable_tracing = false
+#enable_tracing = true
 
 # Set the full url to the Jaeger HTTP Thrift collector.
 # The default if not set will be "http://localhost:14268/api/traces"
-jaeger_endpoint = ""
+#jaeger_endpoint = ""
 
 # Sets the username to be used if basic auth is required for Jaeger.
-jaeger_user = ""
+#jaeger_user = ""
 
 # Sets the password to be used if basic auth is required for Jaeger.
-jaeger_password = ""
+#jaeger_password = ""
 
 # If enabled, the runtime will not create a network namespace for shim and hypervisor processes.
 # This option may have some potential impacts to your host. It should only be used when you know what you're doing.
@@ -492,7 +460,7 @@ jaeger_password = ""
 # with `internetworking_model=none`. The tap device will be in the host network namespace and can connect to a bridge
 # (like OVS) directly.
 # (default: false)
-disable_new_netns = false
+#disable_new_netns = true
 
 # if enabled, the runtime will add all the kata processes inside one dedicated cgroup.
 # The container cgroups in the host are not created, just one single cgroup per sandbox.
@@ -500,18 +468,18 @@ disable_new_netns = false
 # The sandbox cgroup path is the parent cgroup of a container with the PodSandbox annotation.
 # The sandbox cgroup is constrained if there is no container type annotation.
 # See: https://pkg.go.dev/github.com/kata-containers/kata-containers/src/runtime/virtcontainers#ContainerType
-sandbox_cgroup_only = @DEFSANDBOXCGROUPONLY_CLH@
+sandbox_cgroup_only=@DEFSANDBOXCGROUPONLY_CLH@
 
 # Enabled experimental feature list, format: ["a", "b"].
 # Experimental features are features not stable enough for production,
 # they may break compatibility, and are prepared for a big version bump.
 # Supported experimental features:
 # (default: [])
-experimental = @DEFAULTEXPFEATURES@
+experimental=@DEFAULTEXPFEATURES@
 
 # If enabled, user can run pprof tools with shim v2 process through kata-monitor.
 # (default: false)
-enable_pprof = false
+# enable_pprof = true
 
 # If enabled, the runtime will attempt to determine appropriate sandbox size (memory, CPU) before booting the virtual machine. In
 # this case, the runtime will not dynamically update the amount of memory and CPU in the virtual machine. This is generally helpful
@@ -520,7 +488,7 @@ enable_pprof = false
 # - When running with pods, sandbox sizing information will only be available if using Kubernetes >= 1.23 and containerd >= 1.6. CRI-O
 #   does not yet support sandbox sizing annotations.
 # - When running single containers using a tool like ctr, container sizing information will be available.
-static_sandbox_resource_mgmt = @DEFSTATICRESOURCEMGMT_CLH@
+static_sandbox_resource_mgmt=@DEFSTATICRESOURCEMGMT_CLH@
 
 # If specified, sandbox_bind_mounts identifieds host paths to be mounted(ro, rw) into the sandboxes shared path.
 # This is only valid if filesystem sharing is utilized. The provided path(s) will be bindmounted into the shared fs directory.
@@ -530,7 +498,7 @@ static_sandbox_resource_mgmt = @DEFSTATICRESOURCEMGMT_CLH@
 # - "/path/to", default readonly mode.
 # - "/path/to:ro", readonly mode.
 # - "/path/to:rw", readwrite mode.
-sandbox_bind_mounts = @DEFBINDMOUNTS@
+sandbox_bind_mounts=@DEFBINDMOUNTS@
 
 # Base directory of directly attachable network config.
 # Network devices for VM-based containers are allowed to be placed in the

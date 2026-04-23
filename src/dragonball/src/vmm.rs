@@ -6,7 +6,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the THIRD-PARTY file.
 
-use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex, RwLock};
@@ -22,19 +21,6 @@ use crate::error::{EpollError, Result};
 use crate::event_manager::{EventContext, EventManager};
 use crate::vm::Vm;
 use crate::{EXIT_CODE_GENERIC_ERROR, EXIT_CODE_OK};
-
-// Thread types to which the seccomp restrictions apply
-// Currently the restrictions are applied to the whole process
-// More thread types can be added later to accommodate more granular constraints.
-
-/// Union of restrictions for all threads;
-/// The corresponding restrictions are applied to the whole process
-/// This type should be used with any other thread type which has specific restrictions
-pub const ALL_THREADS: &str = "all";
-/// VMM thread
-pub const VMM_THREAD: &str = "vmm";
-/// Vcpu thread
-pub const VCPU_THREAD: &str = "vcpu";
 
 /// Global coordinator to manage API servers, virtual machines, upgrade etc.
 ///
@@ -55,7 +41,8 @@ pub struct Vmm {
     // Will change to a HashMap when enabling 1 VMM with multiple VMs.
     vm: Vm,
 
-    seccomp_filters: HashMap<String, BpfProgram>,
+    vcpu_seccomp_filter: BpfProgram,
+    vmm_seccomp_filter: BpfProgram,
 }
 
 impl Vmm {
@@ -63,7 +50,8 @@ impl Vmm {
     pub fn new(
         api_shared_info: Arc<RwLock<InstanceInfo>>,
         api_event_fd: EventFd,
-        seccomp_filters: HashMap<String, BpfProgram>,
+        vmm_seccomp_filter: BpfProgram,
+        vcpu_seccomp_filter: BpfProgram,
         kvm_fd: Option<RawFd>,
     ) -> Result<Self> {
         let epoll_manager = EpollManager::default();
@@ -71,7 +59,8 @@ impl Vmm {
             api_shared_info,
             api_event_fd,
             epoll_manager,
-            seccomp_filters,
+            vmm_seccomp_filter,
+            vcpu_seccomp_filter,
             kvm_fd,
         )
     }
@@ -81,7 +70,8 @@ impl Vmm {
         api_shared_info: Arc<RwLock<InstanceInfo>>,
         api_event_fd: EventFd,
         epoll_manager: EpollManager,
-        seccomp_filters: HashMap<String, BpfProgram>,
+        vmm_seccomp_filter: BpfProgram,
+        vcpu_seccomp_filter: BpfProgram,
         kvm_fd: Option<RawFd>,
     ) -> Result<Self> {
         let vm = Vm::new(kvm_fd, api_shared_info, epoll_manager.clone())?;
@@ -91,7 +81,8 @@ impl Vmm {
             event_ctx,
             epoll_manager,
             vm,
-            seccomp_filters,
+            vcpu_seccomp_filter,
+            vmm_seccomp_filter,
         })
     }
 
@@ -105,9 +96,14 @@ impl Vmm {
         Some(&mut self.vm)
     }
 
-    /// Get all seccomp rules.
-    pub fn seccomp_filters(&self) -> HashMap<String, BpfProgram> {
-        self.seccomp_filters.clone()
+    /// Get the seccomp rules for vCPU threads.
+    pub fn vcpu_seccomp_filter(&self) -> BpfProgram {
+        self.vcpu_seccomp_filter.clone()
+    }
+
+    /// Get the seccomp rules for VMM threads.
+    pub fn vmm_seccomp_filter(&self) -> BpfProgram {
+        self.vmm_seccomp_filter.clone()
     }
 
     /// Run the event loop to service API requests.
@@ -151,7 +147,7 @@ impl Vmm {
                     }
                 }
                 Err(e) => {
-                    error!("Abruptly exited VMM control loop: {e:?}");
+                    error!("Abruptly exited VMM control loop: {:?}", e);
                     if let EpollError::EpollMgr(dbs_utils::epoll_manager::Error::Epoll(e)) = e {
                         if e.errno() == libc::EAGAIN || e.errno() == libc::EINTR {
                             continue 'poll;
@@ -170,16 +166,16 @@ impl Vmm {
         if let Some(vm) = self.get_vm_mut() {
             if vm.is_vm_initialized() {
                 if let Err(e) = vm.remove_devices() {
-                    warn!("failed to remove devices: {e:?}");
+                    warn!("failed to remove devices: {:?}", e);
                 }
 
                 #[cfg(feature = "dbs-upcall")]
                 if let Err(e) = vm.remove_upcall() {
-                    warn!("failed to remove upcall: {e:?}");
+                    warn!("failed to remove upcall: {:?}", e);
                 }
 
                 if let Err(e) = vm.reset_console() {
-                    warn!("Cannot set canonical mode for the terminal. {e:?}");
+                    warn!("Cannot set canonical mode for the terminal. {:?}", e);
                 }
 
                 // Now, we use exit_code instead of invoking _exit to
@@ -188,12 +184,12 @@ impl Vmm {
                 match vm.vcpu_manager() {
                     Ok(mut mgr) => {
                         if let Err(e) = mgr.exit_all_vcpus() {
-                            warn!("Failed to exit vcpu thread. {e:?}");
+                            warn!("Failed to exit vcpu thread. {:?}", e);
                         }
                         #[cfg(feature = "dbs-upcall")]
                         mgr.set_upcall_channel(None);
                     }
-                    Err(e) => warn!("Failed to get vcpu manager {e:?}"),
+                    Err(e) => warn!("Failed to get vcpu manager {:?}", e),
                 }
 
                 // save exit state to VM, instead of exit process.
@@ -210,29 +206,37 @@ impl std::fmt::Debug for Vmm {
         f.debug_struct("Vmm")
             .field("event_ctx", &self.event_ctx)
             .field("vm", &self.vm.shared_info())
-            .field("seccomp_filters", &self.seccomp_filters)
+            .field("vcpu_seccomp_filter", &self.vcpu_seccomp_filter)
+            .field("vmm_seccomp_filter", &self.vmm_seccomp_filter)
             .finish()
     }
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::collections::HashMap;
-
-    use test_utils::skip_if_kvm_unaccessable;
+    use test_utils::skip_if_not_root;
 
     use super::*;
 
     pub fn create_vmm_instance(epoll_manager: EpollManager) -> Vmm {
         let info = Arc::new(RwLock::new(InstanceInfo::default()));
         let event_fd = EventFd::new(libc::EFD_NONBLOCK).unwrap();
+        let seccomp_filter: BpfProgram = Vec::new();
 
-        Vmm::new_with_epoll_manager(info, event_fd, epoll_manager, HashMap::new(), None).unwrap()
+        Vmm::new_with_epoll_manager(
+            info,
+            event_fd,
+            epoll_manager,
+            seccomp_filter.clone(),
+            seccomp_filter,
+            None,
+        )
+        .unwrap()
     }
 
     #[test]
     fn test_create_vmm_instance() {
-        skip_if_kvm_unaccessable!();
+        skip_if_not_root!();
 
         create_vmm_instance(EpollManager::default());
     }

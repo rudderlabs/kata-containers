@@ -18,8 +18,6 @@ serde_json.workspace = true
 # Agent Policy
 regorus = { version = "0.2.8", default-features = false, features = [
     "arc",
-    "base64",
-    "base64url",
     "regex",
     "std",
 ] }

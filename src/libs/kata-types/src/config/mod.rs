@@ -4,15 +4,16 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Result};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::u32;
 
 use lazy_static::lazy_static;
 
-use crate::sl;
+use crate::{eother, sl};
 
 /// Default configuration values.
 pub mod default;
@@ -24,9 +25,8 @@ pub mod hypervisor;
 pub use self::agent::Agent;
 use self::default::DEFAULT_AGENT_DBG_CONSOLE_PORT;
 pub use self::hypervisor::{
-    BootInfo, CloudHypervisorConfig, DragonballConfig, Factory, FirecrackerConfig, Hypervisor,
-    QemuConfig, RemoteConfig, HYPERVISOR_NAME_DRAGONBALL, HYPERVISOR_NAME_FIRECRACKER,
-    HYPERVISOR_NAME_QEMU,
+    BootInfo, CloudHypervisorConfig, DragonballConfig, FirecrackerConfig, Hypervisor, QemuConfig,
+    RemoteConfig, HYPERVISOR_NAME_DRAGONBALL, HYPERVISOR_NAME_FIRECRACKER, HYPERVISOR_NAME_QEMU,
 };
 
 mod runtime;
@@ -131,7 +131,9 @@ impl TomlConfig {
     pub fn load_from_file<P: AsRef<Path>>(config_file: P) -> Result<(TomlConfig, PathBuf)> {
         let mut result = Self::load_raw_from_file(config_file);
         if let Ok((ref mut config, _)) = result {
-            config.adjust_config()?;
+            Hypervisor::adjust_config(config)?;
+            Runtime::adjust_config(config)?;
+            Agent::adjust_config(config)?;
             info!(sl!(), "get kata config: {:?}", config);
         }
 
@@ -173,27 +175,11 @@ impl TomlConfig {
     /// drop-in config file fragments in config.d/.
     pub fn load(content: &str) -> Result<TomlConfig> {
         let mut config: TomlConfig = toml::from_str(content)?;
-        config.adjust_config()?;
+        Hypervisor::adjust_config(&mut config)?;
+        Runtime::adjust_config(&mut config)?;
+        Agent::adjust_config(&mut config)?;
         info!(sl!(), "get kata config: {:?}", config);
         Ok(config)
-    }
-
-    /// Get the `Factory` configuration from the active hypervisor.
-    pub fn get_factory(&self) -> Factory {
-        let hypervisor_name = self.runtime.hypervisor_name.as_str();
-        self.hypervisor
-            .get(hypervisor_name)
-            .map(|hv| hv.factory.clone())
-            .unwrap_or_default()
-    }
-
-    /// Adjust Kata configuration information.
-    pub fn adjust_config(&mut self) -> Result<()> {
-        Hypervisor::adjust_config(self)?;
-        Runtime::adjust_config(self)?;
-        Agent::adjust_config(self)?;
-
-        Ok(())
     }
 
     /// Validate Kata configuration information.
@@ -206,8 +192,8 @@ impl TomlConfig {
     }
 
     /// Get agent-specfic kernel parameters for further Hypervisor config revision
-    pub fn get_agent_kernel_params(&self) -> Result<BTreeMap<String, String>> {
-        let mut kv = BTreeMap::new();
+    pub fn get_agent_kernel_params(&self) -> Result<HashMap<String, String>> {
+        let mut kv = HashMap::new();
         if let Some(cfg) = self.agent.get(&self.runtime.agent_name) {
             if cfg.debug {
                 kv.insert(LOG_LEVEL_OPTION.to_string(), LOG_LEVEL_DEBUG.to_string());
@@ -331,9 +317,10 @@ impl TomlConfig {
 ///
 /// Each member in `patterns` is a path pattern as described by glob(3)
 pub fn validate_path_pattern<P: AsRef<Path>>(patterns: &[String], path: P) -> Result<()> {
-    let path = path.as_ref().to_str().ok_or_else(|| {
-        std::io::Error::other(format!("Invalid path {}", path.as_ref().to_string_lossy()))
-    })?;
+    let path = path
+        .as_ref()
+        .to_str()
+        .ok_or_else(|| eother!("Invalid path {}", path.as_ref().to_string_lossy()))?;
     for p in patterns.iter() {
         if let Ok(glob) = glob::Pattern::new(p) {
             if glob.matches(path) {
@@ -342,9 +329,7 @@ pub fn validate_path_pattern<P: AsRef<Path>>(patterns: &[String], path: P) -> Re
         }
     }
 
-    Err(std::io::Error::other(format!(
-        "Path {path} is not permitted"
-    )))
+    Err(eother!("Path {} is not permitted", path))
 }
 
 /// Kata configuration information.

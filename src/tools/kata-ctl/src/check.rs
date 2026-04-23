@@ -261,7 +261,8 @@ pub fn check_kernel_module_loaded(kernel_module: &KernelModule) -> Result<(), St
         }
         Err(_e) => {
             let msg = format!(
-                "Command {MODINFO_PATH:} not found, verify that `kmod` package is already installed.",
+                "Command {:} not found, verify that `kmod` package is already installed.",
+                MODINFO_PATH,
             );
             return Err(msg);
         }
@@ -291,7 +292,8 @@ pub fn check_kernel_module_loaded(kernel_module: &KernelModule) -> Result<(), St
 
         Err(_e) => {
             let msg = format!(
-                "Command {MODPROBE_PATH:} not found, verify that `kmod` package is already installed.",
+                "Command {:} not found, verify that `kmod` package is already installed.",
+                MODPROBE_PATH,
             );
             return Err(msg);
         }
@@ -321,7 +323,7 @@ mod tests {
         let path_full = file_path_full.clone();
         let mut file_full = fs::File::create(file_path_full).unwrap();
         let contents = "processor : 0\nvendor_id : VendorExample\nflags : flag_1 flag_2 flag_3 flag_4\nprocessor : 1\n".to_string();
-        writeln!(file_full, "{contents}").unwrap();
+        writeln!(file_full, "{}", contents).unwrap();
 
         // Empty cpuinfo example
         let file_path_empty = dir.path().join("cpuinfo_empty");
@@ -358,15 +360,16 @@ mod tests {
         ];
 
         for (i, d) in tests.iter().enumerate() {
-            let msg = format!("test[{i}]: {d:?}");
+            let msg = format!("test[{}]: {:?}", i, d);
             let result = get_single_cpu_info(d.cpuinfo_path, d.processor_delimiter_str);
-            let msg = format!("{msg}, result: {result:?}");
+            let msg = format!("{}, result: {:?}", msg, result);
 
             if d.result.is_ok() {
                 assert_eq!(
                     result.as_ref().unwrap(),
                     d.result.as_ref().unwrap(),
-                    "{msg}"
+                    "{}",
+                    msg
                 );
                 continue;
             }
@@ -418,15 +421,16 @@ mod tests {
         ];
 
         for (i, d) in tests.iter().enumerate() {
-            let msg = format!("test[{i}]: {d:?}");
+            let msg = format!("test[{}]: {:?}", i, d);
             let result = get_cpu_flags(d.cpu_info_str, d.cpu_flags_tag);
-            let msg = format!("{msg}, result: {result:?}");
+            let msg = format!("{}, result: {:?}", msg, result);
 
             if d.result.is_ok() {
                 assert_eq!(
                     result.as_ref().unwrap(),
                     d.result.as_ref().unwrap(),
-                    "{msg}"
+                    "{}",
+                    msg
                 );
                 continue;
             }
@@ -471,13 +475,13 @@ mod tests {
         ];
 
         for (i, d) in tests.iter().enumerate() {
-            let msg = format!("test[{i}]: {d:?}");
+            let msg = format!("test[{}]: {:?}", i, d);
             let actual = get_kata_all_releases_by_url(d.test_url)
                 .err()
                 .unwrap()
                 .to_string();
-            let msg = format!("{msg}, result: {actual:?}");
-            assert_eq!(d.expected, actual, "{msg}");
+            let msg = format!("{}, result: {:?}", msg, actual);
+            assert_eq!(d.expected, actual, "{}", msg);
         }
     }
 
@@ -486,11 +490,11 @@ mod tests {
         let releases = get_kata_all_releases_by_url(KATA_GITHUB_RELEASE_URL);
         // sometime in GitHub action accessing to github.com API may fail
         // we can skip this test to prevent the whole test fail.
-        if let Err(error) = releases {
+        if releases.is_err() {
             warn!(
                 sl!(),
                 "get kata version failed({:?}), this maybe a temporary error, just skip the test.",
-                error
+                releases.unwrap_err()
             );
             return;
         }
@@ -562,9 +566,9 @@ mod tests {
         ];
 
         for (i, d) in tests.iter().enumerate() {
-            let msg = format!("test[{i}]");
+            let msg = format!("test[{}]", i);
             let result = check_kernel_module_loaded(d.kernel_module);
-            let msg = format!("{msg}, result: {result:?}");
+            let msg = format!("{}, result: {:?}", msg, result);
 
             if d.result.is_ok() {
                 assert_eq!(result, Ok(()));

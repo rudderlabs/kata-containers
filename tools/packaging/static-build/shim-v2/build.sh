@@ -36,31 +36,18 @@ case "${RUNTIME_CHOICE}" in
 esac
 
 [ "${CROSS_BUILD}" == "true" ] && container_image_bk="${container_image}" && container_image="${container_image}-cross-build"
+if [ "${MEASURED_ROOTFS}" == "yes" ]; then
+	info "Enable rootfs measurement config"
 
-# Variants (targets) that build a measured rootfs as of now are:
-# - rootfs-image-confidential
-# - rootfs-image-nvidia-gpu
-# - rootfs-image-nvidia-gpu-confidential
-#
-root_hash_dir="${repo_root_dir}/tools/packaging/kata-deploy/local-build/build"
-verity_variants=(
-	"confidential:KERNELVERITYPARAMS"
-	"nvidia-gpu:KERNELVERITYPARAMS_NV"
-	"nvidia-gpu-confidential:KERNELVERITYPARAMS_CONFIDENTIAL_NV"
-)
-for entry in "${verity_variants[@]}"; do
-	variant="${entry%%:*}"
-	param_var="${entry#*:}"
-	root_hash_file="${root_hash_dir}/root_hash_${variant}.txt"
-	[[ -f "${root_hash_file}" ]] || continue
+	root_hash_file="${repo_root_dir}/tools/packaging/kata-deploy/local-build/build/root_hash.txt"
 
-	# root_hash_*.txt contains a single kernel_verity_params line.
-	IFS= read -r root_measure_config < "${root_hash_file}"
-	root_measure_config="${root_measure_config%$'\r'}"
-	[[ -n "${root_measure_config}" ]] || die "Empty kernel verity params in ${root_hash_file}"
+	[ -f "$root_hash_file" ] || \
+		die "Root hash file for measured rootfs not found at ${root_hash_file}"
 
-	EXTRA_OPTS+=" ${param_var}=${root_measure_config}"
-done
+	root_hash=$(sed -e 's/Root hash:\s*//g;t;d' "${root_hash_file}")
+	root_measure_config="rootfs_verity.scheme=dm-verity rootfs_verity.hash=${root_hash}"
+	EXTRA_OPTS+=" ROOTMEASURECONFIG=\"${root_measure_config}\""
+fi
 
 docker pull ${container_image} || \
 	(docker ${BUILDX} build ${PLATFORM}  \
@@ -89,7 +76,7 @@ case "${RUNTIME_CHOICE}" in
 			-w "${repo_root_dir}/src/runtime-rs" \
 			--user "$(id -u)":"$(id -g)" \
 			"${container_image}" \
-			bash -c "make clean-generated-files && make PREFIX=${PREFIX} QEMUCMD=qemu-system-${arch} ${EXTRA_OPTS}"
+			bash -c "make clean-generated-files && make PREFIX=${PREFIX} QEMUCMD=qemu-system-${arch}"
 
 		docker run --rm -i -v "${repo_root_dir}:${repo_root_dir}" \
 			--env CROSS_BUILD=${CROSS_BUILD} \
@@ -98,7 +85,7 @@ case "${RUNTIME_CHOICE}" in
 			-w "${repo_root_dir}/src/runtime-rs" \
 			--user "$(id -u)":"$(id -g)" \
 			"${container_image}" \
-			bash -c "make PREFIX="${PREFIX}" DESTDIR="${DESTDIR}" ${EXTRA_OPTS} install"
+			bash -c "make PREFIX="${PREFIX}" DESTDIR="${DESTDIR}" install"
 		;;
 esac
 
@@ -121,14 +108,15 @@ case "${RUNTIME_CHOICE}" in
 esac
 
 for vmm in ${VMM_CONFIGS}; do
-	for config_file in "${DESTDIR}/${PREFIX}/share/defaults/kata-containers/configuration-${vmm}"*.toml; do
-		if [ -f "${config_file}" ]; then
-			if [ ${ARCH} == "ppc64le" ]; then
-				# On ppc64le, replace image line with initrd line
-				sed -i -e 's|^image = .*|initrd = "'${PREFIX}'/share/kata-containers/kata-containers-initrd.img"|' "${config_file}"
-			fi
-		fi
-	done
+	config_file="${DESTDIR}/${PREFIX}/share/defaults/kata-containers/configuration-${vmm}.toml"
+	if [ -f ${config_file} ]; then
+		if [ ${ARCH} == "ppc64le" ]; then
+ 			sed -i -e '/^image =/d' ${config_file}
+ 			sed -i 's/^# \(initrd =.*\)/\1/g' ${config_file}
+ 		else
+ 			sed -i -e '/^initrd =/d' ${config_file}
+ 		fi
+	fi
 done
 
 pushd "${DESTDIR}/${PREFIX}/share/defaults/kata-containers"

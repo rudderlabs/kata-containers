@@ -16,6 +16,7 @@ spec:
       labels:
         purpose: pod-test
     spec:
+      terminationGracePeriodSeconds: 0
       runtimeClassName: kata
       containers:
       - name: pod-test

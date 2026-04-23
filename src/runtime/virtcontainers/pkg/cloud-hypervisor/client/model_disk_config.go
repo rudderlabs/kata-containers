@@ -16,7 +16,7 @@ import (
 
 // DiskConfig struct for DiskConfig
 type DiskConfig struct {
-	Path              *string              `json:"path,omitempty"`
+	Path              string               `json:"path"`
 	Readonly          *bool                `json:"readonly,omitempty"`
 	Direct            *bool                `json:"direct,omitempty"`
 	Iommu             *bool                `json:"iommu,omitempty"`
@@ -30,17 +30,15 @@ type DiskConfig struct {
 	Serial            *string              `json:"serial,omitempty"`
 	RateLimitGroup    *string              `json:"rate_limit_group,omitempty"`
 	QueueAffinity     *[]VirtQueueAffinity `json:"queue_affinity,omitempty"`
-	BackingFiles      *bool                `json:"backing_files,omitempty"`
-	Sparse            *bool                `json:"sparse,omitempty"`
-	ImageType         *string              `json:"image_type,omitempty"`
 }
 
 // NewDiskConfig instantiates a new DiskConfig object
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewDiskConfig() *DiskConfig {
+func NewDiskConfig(path string) *DiskConfig {
 	this := DiskConfig{}
+	this.Path = path
 	var readonly bool = false
 	this.Readonly = &readonly
 	var direct bool = false
@@ -53,10 +51,6 @@ func NewDiskConfig() *DiskConfig {
 	this.QueueSize = &queueSize
 	var vhostUser bool = false
 	this.VhostUser = &vhostUser
-	var backingFiles bool = false
-	this.BackingFiles = &backingFiles
-	var sparse bool = true
-	this.Sparse = &sparse
 	return &this
 }
 
@@ -77,43 +71,31 @@ func NewDiskConfigWithDefaults() *DiskConfig {
 	this.QueueSize = &queueSize
 	var vhostUser bool = false
 	this.VhostUser = &vhostUser
-	var backingFiles bool = false
-	this.BackingFiles = &backingFiles
-	var sparse bool = true
-	this.Sparse = &sparse
 	return &this
 }
 
-// GetPath returns the Path field value if set, zero value otherwise.
+// GetPath returns the Path field value
 func (o *DiskConfig) GetPath() string {
-	if o == nil || o.Path == nil {
+	if o == nil {
 		var ret string
 		return ret
 	}
-	return *o.Path
+
+	return o.Path
 }
 
-// GetPathOk returns a tuple with the Path field value if set, nil otherwise
+// GetPathOk returns a tuple with the Path field value
 // and a boolean to check if the value has been set.
 func (o *DiskConfig) GetPathOk() (*string, bool) {
-	if o == nil || o.Path == nil {
+	if o == nil {
 		return nil, false
 	}
-	return o.Path, true
+	return &o.Path, true
 }
 
-// HasPath returns a boolean if a field has been set.
-func (o *DiskConfig) HasPath() bool {
-	if o != nil && o.Path != nil {
-		return true
-	}
-
-	return false
-}
-
-// SetPath gets a reference to the given string and assigns it to the Path field.
+// SetPath sets field value
 func (o *DiskConfig) SetPath(v string) {
-	o.Path = &v
+	o.Path = v
 }
 
 // GetReadonly returns the Readonly field value if set, zero value otherwise.
@@ -532,105 +514,9 @@ func (o *DiskConfig) SetQueueAffinity(v []VirtQueueAffinity) {
 	o.QueueAffinity = &v
 }
 
-// GetBackingFiles returns the BackingFiles field value if set, zero value otherwise.
-func (o *DiskConfig) GetBackingFiles() bool {
-	if o == nil || o.BackingFiles == nil {
-		var ret bool
-		return ret
-	}
-	return *o.BackingFiles
-}
-
-// GetBackingFilesOk returns a tuple with the BackingFiles field value if set, nil otherwise
-// and a boolean to check if the value has been set.
-func (o *DiskConfig) GetBackingFilesOk() (*bool, bool) {
-	if o == nil || o.BackingFiles == nil {
-		return nil, false
-	}
-	return o.BackingFiles, true
-}
-
-// HasBackingFiles returns a boolean if a field has been set.
-func (o *DiskConfig) HasBackingFiles() bool {
-	if o != nil && o.BackingFiles != nil {
-		return true
-	}
-
-	return false
-}
-
-// SetBackingFiles gets a reference to the given bool and assigns it to the BackingFiles field.
-func (o *DiskConfig) SetBackingFiles(v bool) {
-	o.BackingFiles = &v
-}
-
-// GetSparse returns the Sparse field value if set, zero value otherwise.
-func (o *DiskConfig) GetSparse() bool {
-	if o == nil || o.Sparse == nil {
-		var ret bool
-		return ret
-	}
-	return *o.Sparse
-}
-
-// GetSparseOk returns a tuple with the Sparse field value if set, nil otherwise
-// and a boolean to check if the value has been set.
-func (o *DiskConfig) GetSparseOk() (*bool, bool) {
-	if o == nil || o.Sparse == nil {
-		return nil, false
-	}
-	return o.Sparse, true
-}
-
-// HasSparse returns a boolean if a field has been set.
-func (o *DiskConfig) HasSparse() bool {
-	if o != nil && o.Sparse != nil {
-		return true
-	}
-
-	return false
-}
-
-// SetSparse gets a reference to the given bool and assigns it to the Sparse field.
-func (o *DiskConfig) SetSparse(v bool) {
-	o.Sparse = &v
-}
-
-// GetImageType returns the ImageType field value if set, zero value otherwise.
-func (o *DiskConfig) GetImageType() string {
-	if o == nil || o.ImageType == nil {
-		var ret string
-		return ret
-	}
-	return *o.ImageType
-}
-
-// GetImageTypeOk returns a tuple with the ImageType field value if set, nil otherwise
-// and a boolean to check if the value has been set.
-func (o *DiskConfig) GetImageTypeOk() (*string, bool) {
-	if o == nil || o.ImageType == nil {
-		return nil, false
-	}
-	return o.ImageType, true
-}
-
-// HasImageType returns a boolean if a field has been set.
-func (o *DiskConfig) HasImageType() bool {
-	if o != nil && o.ImageType != nil {
-		return true
-	}
-
-	return false
-}
-
-// SetImageType gets a reference to the given string and assigns it to the ImageType field.
-func (o *DiskConfig) SetImageType(v string) {
-	o.ImageType = &v
-}
-
 func (o DiskConfig) MarshalJSON() ([]byte, error) {
 	toSerialize := map[string]interface{}{}
-	if o.Path != nil {
+	if true {
 		toSerialize["path"] = o.Path
 	}
 	if o.Readonly != nil {
@@ -671,15 +557,6 @@ func (o DiskConfig) MarshalJSON() ([]byte, error) {
 	}
 	if o.QueueAffinity != nil {
 		toSerialize["queue_affinity"] = o.QueueAffinity
-	}
-	if o.BackingFiles != nil {
-		toSerialize["backing_files"] = o.BackingFiles
-	}
-	if o.Sparse != nil {
-		toSerialize["sparse"] = o.Sparse
-	}
-	if o.ImageType != nil {
-		toSerialize["image_type"] = o.ImageType
 	}
 	return json.Marshal(toSerialize)
 }

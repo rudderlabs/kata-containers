@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufReader, Result};
 use std::result::{self};
+use std::u32;
 
 use serde::Deserialize;
 
@@ -149,9 +150,6 @@ pub const KATA_ANNO_CFG_HYPERVISOR_KERNEL_HASH: &str =
 /// A sandbox annotation for passing additional guest kernel parameters.
 pub const KATA_ANNO_CFG_HYPERVISOR_KERNEL_PARAMS: &str =
     "io.katacontainers.config.hypervisor.kernel_params";
-/// A sandbox annotation for passing guest dm-verity parameters.
-pub const KATA_ANNO_CFG_HYPERVISOR_KERNEL_VERITY_PARAMS: &str =
-    "io.katacontainers.config.hypervisor.kernel_verity_params";
 /// A sandbox annotation for passing a container guest image path.
 pub const KATA_ANNO_CFG_HYPERVISOR_IMAGE_PATH: &str = "io.katacontainers.config.hypervisor.image";
 /// A sandbox annotation for passing a container guest image SHA-512 hash value.
@@ -286,13 +284,6 @@ pub const KATA_ANNO_CFG_HYPERVISOR_DEFAULT_GPUS: &str =
 pub const KATA_ANNO_CFG_HYPERVISOR_DEFAULT_GPU_MODEL: &str =
     "io.katacontainers.config.hypervisor.default_gpu_model";
 
-/// Block device specific annotation for num_queues
-pub const KATA_ANNO_CFG_HYPERVISOR_BLOCK_DEV_NUM_QUEUES: &str =
-    "io.katacontainers.config.hypervisor.block_device_num_queues";
-/// Block device specific annotation for queue_size
-pub const KATA_ANNO_CFG_HYPERVISOR_BLOCK_DEV_QUEUE_SIZE: &str =
-    "io.katacontainers.config.hypervisor.block_device_queue_size";
-
 // Runtime related annotations
 /// Prefix for Runtime configurations.
 pub const KATA_ANNO_CFG_RUNTIME_PREFIX: &str = "io.katacontainers.config.runtime.";
@@ -306,10 +297,6 @@ pub const KATA_ANNO_CFG_RUNTIME_AGENT: &str = "io.katacontainers.config.runtime.
 /// A sandbox annotation that determines if seccomp should be applied inside guest.
 pub const KATA_ANNO_CFG_DISABLE_GUEST_SECCOMP: &str =
     "io.katacontainers.config.runtime.disable_guest_seccomp";
-/// A sandbox annotation that determines if it should create Kubernetes emptyDir mounts on the guest filesystem.
-pub const KATA_ANNO_CFG_DISABLE_GUEST_EMPTY_DIR: &str =
-    "io.katacontainers.config.runtime.disable_guest_empty_dir";
-
 /// A sandbox annotation that determines if pprof enabled.
 pub const KATA_ANNO_CFG_ENABLE_PPROF: &str = "io.katacontainers.config.runtime.enable_pprof";
 /// A sandbox annotation that determines if experimental features enabled.
@@ -318,9 +305,6 @@ pub const KATA_ANNO_CFG_EXPERIMENTAL: &str = "io.katacontainers.config.runtime.e
 /// interface.
 pub const KATA_ANNO_CFG_INTER_NETWORK_MODEL: &str =
     "io.katacontainers.config.runtime.internetworking_model";
-/// Network device specific annotation for network queues
-pub const KATA_ANNO_CFG_HYPERVISOR_NETWORK_QUEUES: &str =
-    "io.katacontainers.config.hypervisor.network_queues";
 /// SandboxCgroupOnly is a sandbox annotation that determines if kata processes are managed only in sandbox cgroup.
 pub const KATA_ANNO_CFG_SANDBOX_CGROUP_ONLY: &str =
     "io.katacontainers.config.runtime.sandbox_cgroup_only";
@@ -479,12 +463,12 @@ impl Annotation {
     /// update config info by annotation
     pub fn update_config_by_annotation(&self, config: &mut TomlConfig) -> Result<()> {
         if let Some(hv) = self.annotations.get(KATA_ANNO_CFG_RUNTIME_HYPERVISOR) {
-            if config.hypervisor.contains_key(hv) {
+            if config.hypervisor.get(hv).is_some() {
                 config.runtime.hypervisor_name = hv.to_string();
             }
         }
         if let Some(ag) = self.annotations.get(KATA_ANNO_CFG_RUNTIME_AGENT) {
-            if config.agent.contains_key(ag) {
+            if config.agent.get(ag).is_some() {
                 config.runtime.agent_name = ag.to_string();
             }
         }
@@ -516,17 +500,16 @@ impl Annotation {
         let u32_err = io::Error::new(io::ErrorKind::InvalidData, "parse u32 error".to_string());
         let u64_err = io::Error::new(io::ErrorKind::InvalidData, "parse u64 error".to_string());
         let i32_err = io::Error::new(io::ErrorKind::InvalidData, "parse i32 error".to_string());
-        let usize_err = io::Error::new(io::ErrorKind::InvalidData, "parse usize error".to_string());
         let hv = config.hypervisor.get_mut(hypervisor_name).ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("Invalid hypervisor name {hypervisor_name}"),
+                format!("Invalid hypervisor name {}", hypervisor_name),
             )
         })?;
         let ag = config.agent.get_mut(agent_name).ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("Invalid agent name {agent_name}"),
+                format!("Invalid agent name {}", agent_name),
             )
         })?;
         for (key, value) in &self.annotations {
@@ -634,10 +617,7 @@ impl Annotation {
                         hv.boot_info.kernel = value.to_string();
                     }
                     KATA_ANNO_CFG_HYPERVISOR_KERNEL_PARAMS => {
-                        hv.boot_info.replace_kernel_params(value);
-                    }
-                    KATA_ANNO_CFG_HYPERVISOR_KERNEL_VERITY_PARAMS => {
-                        hv.boot_info.replace_kernel_verity_params(value)?;
+                        hv.boot_info.kernel_params = value.to_string();
                     }
                     KATA_ANNO_CFG_HYPERVISOR_IMAGE_PATH => {
                         hv.boot_info.validate_boot_path(value)?;
@@ -655,13 +635,13 @@ impl Annotation {
                     KATA_ANNO_CFG_HYPERVISOR_CPU_FEATURES => {
                         hv.cpu_info.cpu_features = value.to_string();
                     }
-                    KATA_ANNO_CFG_HYPERVISOR_DEFAULT_VCPUS => match self.get_value::<f32>(key) {
+                    KATA_ANNO_CFG_HYPERVISOR_DEFAULT_VCPUS => match self.get_value::<i32>(key) {
                         Ok(num_cpus) => {
                             let num_cpus = num_cpus.unwrap_or_default();
                             if num_cpus
                                 > get_hypervisor_plugin(hypervisor_name)
                                     .unwrap()
-                                    .get_max_cpus() as f32
+                                    .get_max_cpus() as i32
                             {
                                 return Err(io::Error::new(
                                     io::ErrorKind::InvalidData,
@@ -723,7 +703,8 @@ impl Annotation {
                                 return Err(io::Error::new(
                                     io::ErrorKind::InvalidData,
                                     format!(
-                                        "root ports allocated exceeds the max {MAX_PCIE_ROOT_PORT}"
+                                        "root ports allocated exceeds the max {}",
+                                        MAX_PCIE_ROOT_PORT
                                     ),
                                 ));
                             } else {
@@ -741,7 +722,8 @@ impl Annotation {
                                 return Err(io::Error::new(
                                     io::ErrorKind::InvalidData,
                                     format!(
-                                        "switch ports allocated exceeds the max {MAX_PCIE_SWITCH_PORT}"
+                                        "switch ports allocated exceeds the max {}",
+                                        MAX_PCIE_SWITCH_PORT
                                     ),
                                 ));
                             } else {
@@ -852,7 +834,7 @@ impl Annotation {
                             Err(e) => {
                                 return Err(io::Error::new(
                                     io::ErrorKind::InvalidData,
-                                    format!("parse huge pages type: {value}, error: {e}"),
+                                    format!("parse huge pages type: {}, error: {}", value, e),
                                 ));
                             }
                         }
@@ -908,14 +890,6 @@ impl Annotation {
                             }
                         }
                     }
-                    KATA_ANNO_CFG_HYPERVISOR_NETWORK_QUEUES => match self.get_value::<u32>(key) {
-                        Ok(r) => {
-                            hv.network_info.network_queues = r.unwrap_or_default();
-                        }
-                        Err(_e) => {
-                            return Err(u32_err);
-                        }
-                    },
                     // Hypervisor Security related annotations
                     KATA_ANNO_CFG_HYPERVISOR_GUEST_HOOK_PATH => {
                         hv.security_info.validate_path(value)?;
@@ -970,7 +944,8 @@ impl Annotation {
                         }
                     }
                     KATA_ANNO_CFG_HYPERVISOR_VIRTIO_FS_EXTRA_ARGS => {
-                        let args: Vec<String> = value.split(',').map(str::to_string).collect();
+                        let args: Vec<String> =
+                            value.to_string().split(',').map(str::to_string).collect();
                         for arg in args {
                             hv.shared_fs.virtio_fs_extra_args.push(arg.to_string());
                         }
@@ -983,30 +958,11 @@ impl Annotation {
                             return Err(u32_err);
                         }
                     },
-                    KATA_ANNO_CFG_HYPERVISOR_BLOCK_DEV_NUM_QUEUES => {
-                        match self.get_value::<usize>(key) {
-                            Ok(v) => {
-                                hv.blockdev_info.num_queues = v.unwrap_or_default();
-                            }
-                            Err(_e) => {
-                                return Err(usize_err);
-                            }
-                        }
-                    }
-                    KATA_ANNO_CFG_HYPERVISOR_BLOCK_DEV_QUEUE_SIZE => {
-                        match self.get_value::<u32>(key) {
-                            Ok(v) => {
-                                hv.blockdev_info.queue_size = v.unwrap_or_default();
-                            }
-                            Err(_e) => {
-                                return Err(u32_err);
-                            }
-                        }
-                    }
+
                     _ => {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidInput,
-                            format!("Invalid annotation type {key}"),
+                            format!("Invalid annotation type {}", key),
                         ));
                     }
                 }
@@ -1015,7 +971,7 @@ impl Annotation {
                     // update agent config
                     KATA_ANNO_CFG_KERNEL_MODULES => {
                         let kernel_mod: Vec<String> =
-                            value.split(';').map(str::to_string).collect();
+                            value.to_string().split(';').map(str::to_string).collect();
                         for modules in kernel_mod {
                             ag.kernel_modules.push(modules.to_string());
                         }
@@ -1036,16 +992,14 @@ impl Annotation {
                             return Err(u32_err);
                         }
                     },
-                    KATA_ANNO_CFG_RUNTIME_CREATE_CONTAINTER_TIMEOUT => {
-                        match self.get_value::<u32>(key) {
-                            Ok(v) => {
-                                ag.request_timeout_ms = v.unwrap_or_default() * 1000;
-                            }
-                            Err(_e) => {
-                                return Err(u32_err);
-                            }
+                    KATA_ANNO_CFG_RUNTIME_CREATE_CONTAINTER_TIMEOUT => match self.get_value::<u32>(key) {
+                        Ok(v) => {
+                            ag.request_timeout_ms = v.unwrap_or_default() * 1000;
                         }
-                    }
+                        Err(_e) => {
+                            return Err(u32_err);
+                        }
+                    },
                     // update runtime config
                     KATA_ANNO_CFG_RUNTIME_NAME => {
                         let runtime = vec!["virt-container", "linux-container", "wasm-container"];
@@ -1069,14 +1023,6 @@ impl Annotation {
                             return Err(bool_err);
                         }
                     },
-                    KATA_ANNO_CFG_DISABLE_GUEST_EMPTY_DIR => match self.get_value::<bool>(key) {
-                        Ok(r) => {
-                            config.runtime.disable_guest_empty_dir = r.unwrap_or_default();
-                        }
-                        Err(_e) => {
-                            return Err(bool_err);
-                        }
-                    },
                     KATA_ANNO_CFG_ENABLE_PPROF => match self.get_value::<bool>(key) {
                         Ok(r) => {
                             config.runtime.enable_pprof = r.unwrap_or_default();
@@ -1086,7 +1032,8 @@ impl Annotation {
                         }
                     },
                     KATA_ANNO_CFG_EXPERIMENTAL => {
-                        let args: Vec<String> = value.split(',').map(str::to_string).collect();
+                        let args: Vec<String> =
+                            value.to_string().split(',').map(str::to_string).collect();
                         for arg in args {
                             config.runtime.experimental.push(arg.to_string());
                         }
@@ -1132,9 +1079,6 @@ impl Annotation {
                 }
             }
         }
-
-        config.adjust_config()?;
-
         Ok(())
     }
 }

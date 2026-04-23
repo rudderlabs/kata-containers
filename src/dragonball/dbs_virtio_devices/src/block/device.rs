@@ -20,7 +20,6 @@ use dbs_utils::{
 };
 use log::{debug, error, info, warn};
 use virtio_bindings::bindings::virtio_blk::*;
-use virtio_bindings::bindings::virtio_config::VIRTIO_F_VERSION_1;
 use virtio_queue::QueueT;
 use vm_memory::GuestMemoryRegion;
 use vmm_sys_util::eventfd::{EventFd, EFD_NONBLOCK};
@@ -95,8 +94,9 @@ impl<AS: DbsGuestAddressSpace> Block<AS> {
         let disk_size = disk_image.seek(SeekFrom::End(0)).map_err(Error::IOError)?;
         if disk_size % SECTOR_SIZE != 0 {
             warn!(
-                "Disk size {disk_size} is not a multiple of sector size {SECTOR_SIZE}; \
-                 the remainder will not be visible to the guest."
+                "Disk size {} is not a multiple of sector size {}; \
+                 the remainder will not be visible to the guest.",
+                disk_size, SECTOR_SIZE
             );
         }
         let mut avail_features = 1u64 << VIRTIO_F_VERSION_1;
@@ -186,7 +186,10 @@ impl<AS: DbsGuestAddressSpace> Block<AS> {
 
         for kill_evt in self.kill_evts.iter() {
             if let Err(e) = kill_evt.write(1) {
-                error!("virtio-blk: failed to write rate-limiter patch event {e:?}");
+                error!(
+                    "virtio-blk: failed to write rate-limiter patch event {:?}",
+                    e
+                );
                 return Err(Error::InternalError);
             }
         }
@@ -278,12 +281,12 @@ where
                 .name(format!("{}_q{}", "blk_iothread", i))
                 .spawn(move || {
                     if let Err(e) = handler.run() {
-                        error!("Error running worker: {e:?}");
+                        error!("Error running worker: {:?}", e);
                     }
                 })
                 .map(|thread| self.epoll_threads.push(thread))
                 .map_err(|e| {
-                    error!("failed to clone the virtio-block epoll thread: {e}");
+                    error!("failed to clone the virtio-block epoll thread: {}", e);
                     ActivateError::InternalError
                 })?;
 
@@ -311,9 +314,9 @@ where
             // Remove BlockEpollHandler from event manager, so it could be dropped and the resources
             // could be freed, e.g. close disk_image, so vmm won't hold the backend file.
             match self.device_info.remove_event_handler(subscriber_id) {
-                Ok(_) => debug!("virtio-blk: removed subscriber_id {subscriber_id:?}"),
+                Ok(_) => debug!("virtio-blk: removed subscriber_id {:?}", subscriber_id),
                 Err(e) => {
-                    warn!("virtio-blk: failed to remove event handler: {e:?}");
+                    warn!("virtio-blk: failed to remove event handler: {:?}", e);
                 }
             }
         }
@@ -327,13 +330,13 @@ where
         // notify the io threads handlers to terminate.
         for kill_evt in self.kill_evts.iter() {
             if let Err(e) = kill_evt.write(1) {
-                error!("virtio-blk: failed to write kill event {e:?}");
+                error!("virtio-blk: failed to write kill event {:?}", e);
             }
         }
 
         while let Some(thread) = self.epoll_threads.pop() {
             if let Err(e) = thread.join() {
-                error!("virtio-blk: failed to reap the io threads: {e:?}");
+                error!("virtio-blk: failed to reap the io threads: {:?}", e);
             } else {
                 info!("io thread got reaped.");
             }
@@ -373,7 +376,6 @@ mod tests {
     use dbs_interrupt::NoopNotifier;
     use dbs_utils::rate_limiter::{TokenBucket, TokenType};
     use kvm_ioctls::Kvm;
-    use test_utils::skip_if_kvm_unaccessable;
     use virtio_queue::QueueSync;
     use vm_memory::{Bytes, GuestAddress, GuestMemoryMmap, GuestRegionMmap};
     use vmm_sys_util::eventfd::EventFd;
@@ -418,7 +420,7 @@ mod tests {
 
         fn flush(&mut self) -> io::Result<()> {
             if self.flush_error {
-                Err(std::io::Error::other("test flush error"))
+                Err(io::Error::new(io::ErrorKind::Other, "test flush error"))
             } else {
                 Ok(())
             }
@@ -442,7 +444,7 @@ mod tests {
         fn get_device_id(&self) -> io::Result<String> {
             match &self.device_id {
                 Some(id) => Ok(id.to_string()),
-                None => Err(std::io::Error::other("dummy_error")),
+                None => Err(io::Error::new(io::ErrorKind::Other, "dummy_error")),
             }
         }
 
@@ -872,7 +874,7 @@ mod tests {
             VirtioDevice::<Arc<GuestMemoryMmap<()>>, QueueSync, GuestRegionMmap>::device_type(&dev),
             TYPE_BLOCK
         );
-        let queue_size = [128];
+        let queue_size = vec![128];
         assert_eq!(
             VirtioDevice::<Arc<GuestMemoryMmap<()>>, QueueSync, GuestRegionMmap>::queue_max_sizes(
                 &dev
@@ -907,7 +909,6 @@ mod tests {
 
     #[test]
     fn test_block_virtio_device_active() {
-        skip_if_kvm_unaccessable!();
         let device_id = "dummy_device_id";
         let epoll_mgr = EpollManager::default();
 

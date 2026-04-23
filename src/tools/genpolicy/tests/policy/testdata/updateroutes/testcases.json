@@ -1,121 +1,121 @@
 [
   {
-    "allowed": true,
     "description": "compliant routes",
-    "kind": "UpdateRoutesRequest",
+    "allowed": true,
     "request": {
+      "type": "UpdateRoutes",
       "routes": {
         "Routes": [
           {
             "dest": "",
-            "device": "eth0",
-            "family": 0,
             "gateway": "10.244.0.1",
+            "device": "eth0",
+            "source": "",
             "scope": 0,
-            "source": ""
+            "family": 0
           }
         ]
       }
     }
   },
   {
-    "allowed": false,
     "description": "forbidden device",
-    "kind": "UpdateRoutesRequest",
+    "allowed": false,
     "request": {
+      "type": "UpdateRoutes",
       "routes": {
         "Routes": [
           {
             "dest": "",
-            "device": "lo",
-            "family": 0,
             "gateway": "10.244.0.1",
+            "device": "lo",
+            "source": "",
             "scope": 0,
-            "source": ""
+            "family": 0
           }
         ]
       }
     }
   },
   {
-    "allowed": false,
     "description": "one compliant route, one noncompliant",
-    "kind": "UpdateRoutesRequest",
+    "allowed": false,
     "request": {
+      "type": "UpdateRoutes",
       "routes": {
         "Routes": [
           {
             "dest": "",
-            "device": "eth0",
-            "family": 0,
             "gateway": "10.244.0.1",
+            "device": "eth0",
+            "source": "",
             "scope": 0,
-            "source": ""
+            "family": 0
           },
           {
             "dest": "",
-            "device": "eth0",
-            "family": 0,
             "gateway": "10.244.0.1",
+            "device": "eth0",
+            "source": "::1",
             "scope": 0,
-            "source": "::1"
+            "family": 0
           }
         ]
       }
     }
   },
   {
-    "allowed": false,
     "description": "noncompliant routes",
-    "kind": "UpdateRoutesRequest",
+    "allowed": false,
     "request": {
+      "type": "UpdateRoutes",
       "routes": {
         "Routes": [
           {
             "dest": "",
-            "device": "eth0",
-            "family": 0,
             "gateway": "10.244.0.1",
+            "device": "eth0",
+            "source": "127.0.0.1",
             "scope": 0,
-            "source": "127.0.0.1"
+            "family": 0
           }
         ]
       }
     }
   },
   {
-    "allowed": false,
     "description": "noncompliant routes ipv6 1",
-    "kind": "UpdateRoutesRequest",
+    "allowed": false,
     "request": {
+      "type": "UpdateRoutes",
       "routes": {
         "Routes": [
           {
             "dest": "",
-            "device": "eth0",
-            "family": 0,
             "gateway": "10.244.0.1",
+            "device": "eth0",
+            "source": "::1",
             "scope": 0,
-            "source": "::1"
+            "family": 0
           }
         ]
       }
     }
   },
   {
-    "allowed": false,
     "description": "noncompliant routes ipv6 2",
-    "kind": "UpdateRoutesRequest",
+    "allowed": false,
     "request": {
+      "type": "UpdateRoutes",
       "routes": {
         "Routes": [
           {
             "dest": "",
-            "device": "eth0",
-            "family": 0,
             "gateway": "10.244.0.1",
+            "device": "eth0",
+            "source": "00::001",
             "scope": 0,
-            "source": "00::001"
+            "family": 0
           }
         ]
       }

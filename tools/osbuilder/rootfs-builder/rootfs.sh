@@ -60,9 +60,9 @@ REPO_COMPONENTS=${REPO_COMPONENTS:-""}
 
 KBUILD_SIGN_PIN=${KBUILD_SIGN_PIN:-""}
 NVIDIA_GPU_STACK=${NVIDIA_GPU_STACK:-""}
-BUILD_VARIANT=${BUILD_VARIANT:-""}
+VARIANT=${VARIANT:-""}
 
-[[ "${BUILD_VARIANT}" == "nvidia-gpu"* ]] && source "${script_dir}/nvidia/nvidia_rootfs.sh"
+[[ "${VARIANT}" == "nvidia-gpu"* ]] && source "${script_dir}/nvidia/nvidia_rootfs.sh"
 
 #For cross build
 CROSS_BUILD=${CROSS_BUILD:-false}
@@ -190,7 +190,7 @@ AGENT_SOURCE_BIN    Path to the directory of agent binary.
                     AGENT_SOURCE_BIN and AGENT_TARBALL should never be used toghether.
                     Default value: <not set>
 
-AGENT_TARBALL       Path to the kata-agent.tar.zst tarball to be unpacked inside the
+AGENT_TARBALL       Path to the kata-agent.tar.xz tarball to be unpacked inside the
                     rootfs.
                     If set, this will take the priority and will be used instead of
                     building the agent.
@@ -205,7 +205,7 @@ ARCH                Target architecture (according to \`uname -m\`).
                     and glibc agents.
                     Default value: $(uname -m)
 
-COCO_GUEST_COMPONENTS_TARBALL       Path to the kata-coco-guest-components.tar.zst tarball to be unpacked inside the
+COCO_GUEST_COMPONENTS_TARBALL       Path to the kata-coco-guest-components.tar.xz tarball to be unpacked inside the
                                     rootfs.
                                     If set, the tarball will be unpacked onto the rootfs.
                                     Default value: <not set>
@@ -234,7 +234,7 @@ KERNEL_MODULES_DIR  Path to a directory containing kernel modules to include in
 LIBC                libc the agent is built against (gnu or musl).
                     Default value: ${LIBC} (varies with architecture)
 
-PAUSE_IMAGE_TARBALL Path to the kata-static-pause-image.tar.zst tarball to be unpacked inside the
+PAUSE_IMAGE_TARBALL Path to the kata-static-pause-image.tar.xz tarball to be unpacked inside the
                     rootfs.
                     If set, the tarball will be unpacked onto the rootfs.
                     Default value: <not set>
@@ -571,7 +571,7 @@ build_rootfs_distro()
 			--env REPO_COMPONENTS="${REPO_COMPONENTS}" \
 			--env OSBUILDER_VERSION="${OSBUILDER_VERSION}" \
 			--env OS_VERSION="${OS_VERSION}" \
-			--env BUILD_VARIANT="${BUILD_VARIANT}" \
+			--env VARIANT="${VARIANT}" \
 			--env INSIDE_CONTAINER=1 \
 			--env SECCOMP="${SECCOMP}" \
 			--env SELINUX="${SELINUX}" \
@@ -756,7 +756,7 @@ EOF
 		cp ${AGENT_SOURCE_BIN} ${AGENT_DEST}
 		OK "cp ${AGENT_SOURCE_BIN} ${AGENT_DEST}"
 	else
-		tar  --zstd -xvf ${AGENT_TARBALL} -C ${ROOTFS_DIR}
+		tar xvJpf ${AGENT_TARBALL} -C ${ROOTFS_DIR}
 	fi
 
 	${stripping_tool} ${ROOTFS_DIR}/usr/bin/kata-agent
@@ -803,7 +803,7 @@ EOF
 
 	if [[ -n "${GUEST_HOOKS_TARBALL}" ]]; then
 		info "Install the ${GUEST_HOOKS_TARBALL} guest hooks"
-		tar --zstd -xvf "${GUEST_HOOKS_TARBALL}" -C "${ROOTFS_DIR}"
+		tar xvJpf "${GUEST_HOOKS_TARBALL}" -C "${ROOTFS_DIR}"
 	fi
 
 	info "Check init is installed"
@@ -812,12 +812,12 @@ EOF
 
 	if [ -n "${PAUSE_IMAGE_TARBALL}" ] ; then
 		info "Installing the pause image tarball"
-		tar --zstd -xvf ${PAUSE_IMAGE_TARBALL} -C ${ROOTFS_DIR}
+		tar xvJpf ${PAUSE_IMAGE_TARBALL} -C ${ROOTFS_DIR}
 	fi
 
 	if [ -n "${COCO_GUEST_COMPONENTS_TARBALL}" ] ; then
 		info "Installing the Confidential Containers guest components tarball"
-		tar --zstd -xvf ${COCO_GUEST_COMPONENTS_TARBALL} -C ${ROOTFS_DIR}
+		tar xvJpf ${COCO_GUEST_COMPONENTS_TARBALL} -C ${ROOTFS_DIR}
 	fi
 
 	# Create an empty /etc/resolv.conf, to allow agent to bind mount container resolv.conf to Kata VM
@@ -913,13 +913,13 @@ main()
 	init="${ROOTFS_DIR}/sbin/init"
 	setup_rootfs
 
-	if [ "${BUILD_VARIANT}" = "nvidia-gpu" ]; then
+	if [ "${VARIANT}" = "nvidia-gpu" ]; then
 		setup_nvidia_gpu_rootfs_stage_one
 		setup_nvidia_gpu_rootfs_stage_two
 		return $?
 	fi
 
-	if [ "${BUILD_VARIANT}" = "nvidia-gpu-confidential" ]; then
+	if [ "${VARIANT}" = "nvidia-gpu-confidential" ]; then
 		setup_nvidia_gpu_rootfs_stage_one "confidential"
 		setup_nvidia_gpu_rootfs_stage_two "confidential"
 		return $?

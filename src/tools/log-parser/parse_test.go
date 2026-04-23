@@ -294,7 +294,7 @@ func TestParseTime(t *testing.T) {
 	}
 
 	for i, d := range data {
-		if d.timeString != "" && d.t.IsZero() {
+		if d.timeString != "" && d.t == (time.Time{}) {
 			t, err := time.Parse(time.RFC3339Nano, d.timeString)
 			assert.NoError(err)
 			d.t = t

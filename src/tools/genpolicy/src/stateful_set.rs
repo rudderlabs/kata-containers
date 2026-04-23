@@ -102,8 +102,7 @@ impl yaml::K8sResource for StatefulSet {
     }
 
     fn get_sandbox_name(&self) -> Option<String> {
-        // https://github.com/kubernetes/kubernetes/blob/b35c5c0a301d326fdfa353943fca077778544ac6/pkg/controller/statefulset/stateful_set_utils.go#L113
-        yaml::name_regex_from_meta(&self.metadata).map(|prefix| format!("{prefix}-[0-9]+"))
+        None
     }
 
     fn get_namespace(&self) -> Option<String> {
@@ -147,12 +146,12 @@ impl yaml::K8sResource for StatefulSet {
             storages,
             container,
             settings,
-            &self.spec.template.spec,
+            &self.spec.template.spec.volumes,
         );
     }
 
-    fn generate_initdata_anno(&self, agent_policy: &policy::AgentPolicy) -> String {
-        agent_policy.generate_initdata_anno(self)
+    fn generate_policy(&self, agent_policy: &policy::AgentPolicy) -> String {
+        agent_policy.generate_policy(self)
     }
 
     fn serialize(&mut self, policy: &str) -> String {
@@ -194,26 +193,16 @@ impl yaml::K8sResource for StatefulSet {
             .or_else(|| Some(String::new()))
     }
 
-    fn get_process_fields(
-        &self,
-        process: &mut policy::KataProcess,
-        must_check_passwd: &mut bool,
-        is_pause_container: bool,
-    ) {
+    fn get_process_fields(&self, process: &mut policy::KataProcess, must_check_passwd: &mut bool) {
         yaml::get_process_fields(
             process,
-            must_check_passwd,
-            is_pause_container,
             &self.spec.template.spec.securityContext,
+            must_check_passwd,
         );
     }
 
     fn get_sysctls(&self) -> Vec<pod::Sysctl> {
         yaml::get_sysctls(&self.spec.template.spec.securityContext)
-    }
-
-    fn get_pod_security_context(&self) -> Option<&pod::PodSecurityContext> {
-        self.spec.template.spec.securityContext.as_ref()
     }
 }
 

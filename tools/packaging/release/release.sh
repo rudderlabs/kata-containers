@@ -40,7 +40,6 @@ function _check_required_env_var()
 		KATA_STATIC_TARBALL) env_var="${KATA_STATIC_TARBALL}" ;;
 		KATA_DEPLOY_IMAGE_TAGS) env_var="${KATA_DEPLOY_IMAGE_TAGS}" ;;
 		KATA_DEPLOY_REGISTRIES) env_var="${KATA_DEPLOY_REGISTRIES}" ;;
-		KATA_TOOLS_STATIC_TARBALL) env_var="${KATA_TOOLS_STATIC_TARBALL}" ;;
 		*) >&2 _die "Invalid environment variable \"${1}\"" ;;
 	esac
 
@@ -144,17 +143,15 @@ function _publish_multiarch_manifest()
 	_check_required_env_var "KATA_DEPLOY_IMAGE_TAGS"
 	_check_required_env_var "KATA_DEPLOY_REGISTRIES"
 
-	# Per-arch images are built without provenance/SBOM so each tag is a single image manifest;
-	# quay.io rejects pushing multi-arch manifest lists that include attestation manifests
-	# ("manifest invalid"), so we do not enable them for this workflow.
-	# imagetools create pushes to --tag by default.
 	for registry in "${REGISTRIES[@]}"; do
 		for tag in "${IMAGE_TAGS[@]}"; do
-			docker buildx imagetools create --tag "${registry}:${tag}" \
-				"${registry}:${tag}-amd64" \
-				"${registry}:${tag}-arm64" \
-				"${registry}:${tag}-s390x" \
-				"${registry}:${tag}-ppc64le"
+			docker manifest create ${registry}:${tag} \
+				--amend ${registry}:${tag}-amd64 \
+				--amend ${registry}:${tag}-arm64 \
+				--amend ${registry}:${tag}-s390x \
+				--amend ${registry}:${tag}-ppc64le
+
+			docker manifest push ${registry}:${tag}
 		done
 	done
 }
@@ -167,22 +164,8 @@ function _upload_kata_static_tarball()
 
 	RELEASE_VERSION="$(_release_version)"
 
-	new_tarball_name="kata-static-${RELEASE_VERSION}-${ARCHITECTURE}.tar.zst"
+	new_tarball_name="kata-static-${RELEASE_VERSION}-${ARCHITECTURE}.tar.xz"
 	mv ${KATA_STATIC_TARBALL} "${new_tarball_name}"
-	echo "uploading asset '${new_tarball_name}' (${ARCHITECTURE}) for tag: ${RELEASE_VERSION}"
-	gh release upload "${RELEASE_VERSION}" "${new_tarball_name}"
-}
-
-function _upload_kata_tools_static_tarball()
-{
-	_check_required_env_var "GH_TOKEN"
-	_check_required_env_var "ARCHITECTURE"
-	_check_required_env_var "KATA_TOOLS_STATIC_TARBALL"
-
-	RELEASE_VERSION="$(_release_version)"
-
-	new_tarball_name="kata-tools-static-${RELEASE_VERSION}-${ARCHITECTURE}.tar.zst"
-	mv ${KATA_TOOLS_STATIC_TARBALL} "${new_tarball_name}"
 	echo "uploading asset '${new_tarball_name}' (${ARCHITECTURE}) for tag: ${RELEASE_VERSION}"
 	gh release upload "${RELEASE_VERSION}" "${new_tarball_name}"
 }
@@ -233,7 +216,6 @@ function _upload_helm_chart_tarball()
 
 	RELEASE_VERSION="$(_release_version)"
 
-	helm dependencies update ${repo_root_dir}/tools/packaging/kata-deploy/helm-chart/kata-deploy
 	helm package ${repo_root_dir}/tools/packaging/kata-deploy/helm-chart/kata-deploy
 	gh release upload "${RELEASE_VERSION}" "kata-deploy-${RELEASE_VERSION}.tgz"
 }
@@ -247,7 +229,6 @@ function main()
 		release-version) _release_version;;
 		create-new-release) _create_new_release ;;
 		upload-kata-static-tarball) _upload_kata_static_tarball ;;
-		upload-kata-tools-static-tarball) _upload_kata_tools_static_tarball ;;
 		upload-versions-yaml-file) _upload_versions_yaml_file ;;
 		upload-vendored-code-tarball) _upload_vendored_code_tarball ;;
 		upload-libseccomp-tarball) _upload_libseccomp_tarball ;;

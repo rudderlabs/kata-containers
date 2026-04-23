@@ -255,10 +255,6 @@ func (s *Sandbox) GetHypervisorPid() (int, error) {
 	return 0, nil
 }
 
-func (s *Sandbox) RescanNetwork(ctx context.Context) error {
-	return nil
-}
-
 func (s *Sandbox) GuestVolumeStats(ctx context.Context, path string) ([]byte, error) {
 	return nil, nil
 }

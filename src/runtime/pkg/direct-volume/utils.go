@@ -17,7 +17,6 @@ import (
 const (
 	mountInfoFileName = "mountInfo.json"
 
-	EncryptionKeyMetadataKey       = "encryptionKey"
 	FSGroupMetadataKey             = "fsGroup"
 	FSGroupChangePolicyMetadataKey = "fsGroupChangePolicy"
 )
@@ -78,14 +77,6 @@ func Add(volumePath string, mountInfo string) error {
 	return os.WriteFile(filepath.Join(volumeDir, mountInfoFileName), []byte(mountInfo), 0600)
 }
 
-func AddMountInfo(volumePath string, mountInfo MountInfo) error {
-	s, err := json.Marshal(&mountInfo)
-	if err != nil {
-		return err
-	}
-	return Add(volumePath, string(s))
-}
-
 // Remove deletes the direct volume path including all the files inside it.
 func Remove(volumePath string) error {
 	return os.RemoveAll(filepath.Join(kataDirectVolumeRootPath, b64.URLEncoding.EncodeToString([]byte(volumePath))))
@@ -108,29 +99,18 @@ func VolumeMountInfo(volumePath string) (*MountInfo, error) {
 	return &mountInfo, nil
 }
 
-// IsVolumeMounted returns whether the direct volume mount is present.
-func IsVolumeMounted(volumePath string) (bool, error) {
-	if _, err := VolumeMountInfo(volumePath); err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	return true, nil
-}
-
 // RecordSandboxId associates a sandbox id with a direct volume.
-func RecordSandboxID(sandboxID string, volumePath string) error {
+func RecordSandboxId(sandboxId string, volumePath string) error {
 	encodedPath := b64.URLEncoding.EncodeToString([]byte(volumePath))
 	mountInfoFilePath := filepath.Join(kataDirectVolumeRootPath, encodedPath, mountInfoFileName)
 	if _, err := os.Stat(mountInfoFilePath); err != nil {
 		return err
 	}
 
-	return os.WriteFile(filepath.Join(kataDirectVolumeRootPath, encodedPath, sandboxID), []byte(""), 0600)
+	return os.WriteFile(filepath.Join(kataDirectVolumeRootPath, encodedPath, sandboxId), []byte(""), 0600)
 }
 
-func GetSandboxIDForVolume(volumePath string) (string, error) {
+func GetSandboxIdForVolume(volumePath string) (string, error) {
 	files, err := os.ReadDir(filepath.Join(kataDirectVolumeRootPath, b64.URLEncoding.EncodeToString([]byte(volumePath))))
 	if err != nil {
 		return "", err

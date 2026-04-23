@@ -5,13 +5,13 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-load "${BATS_TEST_DIRNAME}/lib.sh"
 load "${BATS_TEST_DIRNAME}/../../common.bash"
 load "${BATS_TEST_DIRNAME}/tests_common.sh"
 
 setup() {
     auto_generate_policy_enabled || skip "Auto-generated policy tests are disabled."
-    setup_common || die "setup_common failed"
+
+    get_pod_config_dir
 
     deployment_name="policy-redis-deployment"
     pod_sc_deployment_yaml="${pod_config_dir}/k8s-pod-sc-deployment.yaml"
@@ -37,35 +37,44 @@ setup() {
     cp "${pod_sc_deployment_supplementalgroups_yaml}" "${incorrect_deployment_yaml_supplementalgroups}"
 }
 
-wait_for_successful_rollout() {
-    cmd="kubectl rollout status --timeout=1s deployment/${deployment_name} | grep 'successfully rolled out'"
-    abort_cmd="kubectl describe pod ${deployment_name} | grep \"CreateContainerRequest is blocked by policy\""
-    info "Waiting ${wait_time}s with sleep ${sleep_time}s for: ${cmd}. Abort if: ${abort_cmd}."
-    waitForCmdWithAbortCmd "${wait_time}" "${sleep_time}" "${cmd}" "${abort_cmd}"
-}
-
 @test "Successful sc deployment with auto-generated policy and container image volumes" {
     # Initiate deployment
     kubectl apply -f "${pod_sc_deployment_yaml}"
-    wait_for_successful_rollout
+
+    # Wait for the deployment to be created
+    cmd="kubectl rollout status --timeout=1s deployment/${deployment_name} | grep 'successfully rolled out'"
+    info "Waiting for: ${cmd}"
+    waitForProcess "${wait_time}" "${sleep_time}" "${cmd}"
 }
 
 @test "Successful sc with fsGroup/supplementalGroup deployment with auto-generated policy and container image volumes" {
     # Initiate deployment
     kubectl apply -f "${pod_sc_deployment_supplementalgroups_yaml}"
-    wait_for_successful_rollout
+
+    # Wait for the deployment to be created
+    cmd="kubectl rollout status --timeout=1s deployment/${deployment_name} | grep 'successfully rolled out'"
+    info "Waiting for: ${cmd}"
+    waitForProcess "${wait_time}" "${sleep_time}" "${cmd}"
 }
 
 @test "Successful sc deployment with security context choosing another valid user" {
     # Initiate deployment
     kubectl apply -f "${pod_sc_nobodyupdate_deployment_yaml}"
-    wait_for_successful_rollout
+
+    # Wait for the deployment to be created
+    cmd="kubectl rollout status --timeout=1s deployment/${deployment_name} | grep 'successfully rolled out'"
+    info "Waiting for: ${cmd}"
+    waitForProcess "${wait_time}" "${sleep_time}" "${cmd}"
 }
 
 @test "Successful layered sc deployment with auto-generated policy and container image volumes" {
     # Initiate deployment
     kubectl apply -f "${pod_sc_layered_deployment_yaml}"
-    wait_for_successful_rollout
+
+    # Wait for the deployment to be created
+    cmd="kubectl rollout status --timeout=1s deployment/${deployment_name} | grep 'successfully rolled out'"
+    info "Waiting for: ${cmd}"
+    waitForProcess "${wait_time}" "${sleep_time}" "${cmd}"
 }
 
 test_deployment_policy_error() {
@@ -113,10 +122,7 @@ teardown() {
 
     # Clean-up
     kubectl delete deployment "${deployment_name}"
-    if [ "${BATS_TEST_NUMBER}" == "1" ]; then
-        delete_tmp_policy_settings_dir "${policy_settings_dir}"
-    fi
 
+    delete_tmp_policy_settings_dir "${policy_settings_dir}"
     rm -f "${incorrect_deployment_yaml}"
-    teardown_common "${node}" "${node_start_time:-}"
 }

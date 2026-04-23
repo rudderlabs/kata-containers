@@ -27,11 +27,10 @@ use std::io;
 use std::process::exit;
 
 use ops::check_ops::{
-    handle_check, handle_iptables, handle_metrics, handle_monitor, handle_version,
+    handle_check, handle_factory, handle_iptables, handle_metrics, handle_monitor, handle_version,
 };
 use ops::env_ops::handle_env;
 use ops::exec_ops::handle_exec;
-use ops::factory_ops::handle_factory;
 use ops::volume_ops::handle_direct_volume;
 use slog::{error, o};
 
@@ -68,7 +67,7 @@ fn real_main() -> Result<()> {
             Commands::DirectVolume(args) => handle_direct_volume(args),
             Commands::Exec(args) => handle_exec(args),
             Commands::Env(args) => handle_env(args),
-            Commands::Factory(args) => handle_factory(args),
+            Commands::Factory => handle_factory(),
             Commands::Iptables(args) => handle_iptables(args),
             Commands::Metrics(args) => handle_metrics(args),
             Commands::Monitor(args) => handle_monitor(args),

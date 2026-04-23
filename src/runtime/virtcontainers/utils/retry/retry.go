@@ -18,8 +18,8 @@ type RetryableFunc func() error
 
 var (
 	DefaultAttempts      = uint(10)
-	DefaultDelay         = 100 * time.Millisecond
-	DefaultMaxJitter     = 100 * time.Millisecond
+	DefaultDelayMS       = 100 * time.Millisecond
+	DefaultMaxJitterMS   = 100 * time.Millisecond
 	DefaultOnRetry       = func(n uint, err error) {}
 	DefaultRetryIf       = IsRecoverable
 	DefaultDelayType     = CombineDelay(BackOffDelay, RandomDelay)
@@ -177,8 +177,8 @@ func Do(retryableFunc RetryableFunc, opts ...Option) error {
 	// default
 	config := &Config{
 		attempts:      DefaultAttempts,
-		delay:         DefaultDelay,
-		maxJitter:     DefaultMaxJitter,
+		delay:         DefaultDelayMS,
+		maxJitter:     DefaultMaxJitterMS,
 		onRetry:       DefaultOnRetry,
 		retryIf:       DefaultRetryIf,
 		delayType:     DefaultDelayType,

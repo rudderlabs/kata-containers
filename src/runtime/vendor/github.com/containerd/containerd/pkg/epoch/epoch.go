@@ -37,11 +37,12 @@ func SourceDateEpoch() (*time.Time, error) {
 	if !ok || v == "" {
 		return nil, nil // not an error
 	}
-	t, err := ParseSourceDateEpoch(v)
+	i64, err := strconv.ParseInt(v, 10, 64)
 	if err != nil {
-		return nil, fmt.Errorf("invalid %s value: %w", SourceDateEpochEnv, err)
+		return nil, fmt.Errorf("invalid %s value %q: %w", SourceDateEpochEnv, v, err)
 	}
-	return t, nil
+	unix := time.Unix(i64, 0).UTC()
+	return &unix, nil
 }
 
 // SourceDateEpochOrNow returns the SOURCE_DATE_EPOCH time if available,
@@ -57,26 +58,12 @@ func SourceDateEpochOrNow() time.Time {
 	return time.Now().UTC()
 }
 
-// ParseSourceDateEpoch parses the given source date epoch, as *time.Time.
-// It returns an error if sourceDateEpoch is empty or not well-formatted.
-func ParseSourceDateEpoch(sourceDateEpoch string) (*time.Time, error) {
-	if sourceDateEpoch == "" {
-		return nil, fmt.Errorf("value is empty")
-	}
-	i64, err := strconv.ParseInt(sourceDateEpoch, 10, 64)
-	if err != nil {
-		return nil, fmt.Errorf("invalid value: %w", err)
-	}
-	unix := time.Unix(i64, 0).UTC()
-	return &unix, nil
-}
-
 // SetSourceDateEpoch sets the SOURCE_DATE_EPOCH env var.
 func SetSourceDateEpoch(tm time.Time) {
-	_ = os.Setenv(SourceDateEpochEnv, strconv.Itoa(int(tm.Unix())))
+	os.Setenv(SourceDateEpochEnv, fmt.Sprintf("%d", tm.Unix()))
 }
 
 // UnsetSourceDateEpoch unsets the SOURCE_DATE_EPOCH env var.
 func UnsetSourceDateEpoch() {
-	_ = os.Unsetenv(SourceDateEpochEnv)
+	os.Unsetenv(SourceDateEpochEnv)
 }

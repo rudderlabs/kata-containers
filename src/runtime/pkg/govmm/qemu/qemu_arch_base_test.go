@@ -80,19 +80,14 @@ func TestAppendVirtioBalloon(t *testing.T) {
 	var OnDisableModern = ",disable-modern=true"
 	var OffDisableModern = ",disable-modern=false"
 
-	var OnFreePageReporting = ",free-page-reporting=on"
-	var OffFreePageReporting = ",free-page-reporting=off"
-
-	testAppend(balloonDevice, deviceString+OffDeflateOnOMM+OffDisableModern+OffFreePageReporting, t)
+	testAppend(balloonDevice, deviceString+OffDeflateOnOMM+OffDisableModern, t)
 
 	balloonDevice.DeflateOnOOM = true
-	testAppend(balloonDevice, deviceString+OnDeflateOnOMM+OffDisableModern+OffFreePageReporting, t)
+	testAppend(balloonDevice, deviceString+OnDeflateOnOMM+OffDisableModern, t)
 
 	balloonDevice.DisableModern = true
-	testAppend(balloonDevice, deviceString+OnDeflateOnOMM+OnDisableModern+OffFreePageReporting, t)
+	testAppend(balloonDevice, deviceString+OnDeflateOnOMM+OnDisableModern, t)
 
-	balloonDevice.FreePageReporting = true
-	testAppend(balloonDevice, deviceString+OnDeflateOnOMM+OnDisableModern+OnFreePageReporting, t)
 }
 
 func TestAppendPCIBridgeDevice(t *testing.T) {

@@ -8,15 +8,14 @@ use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{anyhow, Context, Result};
 use kata_sys_util::rand::RandomBytes;
-use kata_types::config::hypervisor::{BlockDeviceInfo, TopologyConfigInfo, VIRTIO_SCSI};
+use kata_types::config::hypervisor::TopologyConfigInfo;
 use tokio::sync::{Mutex, RwLock};
 
 use crate::{
     vhost_user_blk::VhostUserBlkDevice, BlockConfig, BlockDevice, HybridVsockDevice, Hypervisor,
     NetworkDevice, PCIePortDevice, ProtectionDevice, ShareFsDevice, VfioDevice, VhostUserConfig,
     VhostUserNetDevice, VsockDevice, KATA_BLK_DEV_TYPE, KATA_CCW_DEV_TYPE, KATA_MMIO_BLK_DEV_TYPE,
-    KATA_NVDIMM_DEV_TYPE, KATA_SCSI_DEV_TYPE, VIRTIO_BLOCK_CCW, VIRTIO_BLOCK_MMIO,
-    VIRTIO_BLOCK_PCI, VIRTIO_PMEM,
+    KATA_NVDIMM_DEV_TYPE, VIRTIO_BLOCK_CCW, VIRTIO_BLOCK_MMIO, VIRTIO_BLOCK_PCI, VIRTIO_PMEM,
 };
 
 use super::{
@@ -117,8 +116,12 @@ impl DeviceManager {
         self.pcie_topology.clone()
     }
 
-    async fn get_block_device_info(&self) -> BlockDeviceInfo {
-        self.hypervisor.hypervisor_config().await.blockdev_info
+    async fn get_block_driver(&self) -> String {
+        self.hypervisor
+            .hypervisor_config()
+            .await
+            .blockdev_info
+            .block_device_driver
     }
 
     async fn try_add_device(&mut self, device_id: &str) -> Result<()> {
@@ -271,11 +274,11 @@ impl DeviceManager {
         let virt_path = if dev_type == DEVICE_TYPE_BLOCK {
             let current_index = self.shared_info.declare_device_index(is_pmem)?;
             let drive_name = if is_pmem {
-                format!("pmem{current_index}")
+                format!("pmem{}", current_index)
             } else {
                 get_virt_drive_name(current_index as i32)?
             };
-            let virt_path_name = format!("/dev/{drive_name}");
+            let virt_path_name = format!("/dev/{}", drive_name);
             Some((current_index, virt_path_name))
         } else {
             // only dev_type is block, otherwise, it's None.
@@ -468,9 +471,6 @@ impl DeviceManager {
                 block_config.driver_option = KATA_NVDIMM_DEV_TYPE.to_string();
                 is_pmem = true;
             }
-            VIRTIO_SCSI => {
-                block_config.driver_option = KATA_SCSI_DEV_TYPE.to_string();
-            }
             _ => {
                 return Err(anyhow!(
                     "unsupported driver type {}",
@@ -505,7 +505,7 @@ impl DeviceManager {
     fn new_device_id(&self) -> Result<String> {
         for _ in 0..5 {
             let rand_bytes = RandomBytes::new(8);
-            let id = format!("{rand_bytes:x}");
+            let id = format!("{:x}", rand_bytes);
 
             // check collision in devices
             if !self.devices.contains_key(&id) {
@@ -594,7 +594,7 @@ pub async fn do_handle_device(
         .await
         .try_add_device(&device_id)
         .await
-        .context("failed to add device")?;
+        .context("failed to add deivce")?;
 
     let device_info = d
         .read()
@@ -619,15 +619,15 @@ pub async fn do_update_device(
     Ok(())
 }
 
-pub async fn get_block_device_info(d: &RwLock<DeviceManager>) -> BlockDeviceInfo {
-    d.read().await.get_block_device_info().await
+pub async fn get_block_driver(d: &RwLock<DeviceManager>) -> String {
+    d.read().await.get_block_driver().await
 }
 
 #[cfg(test)]
 mod tests {
     use super::DeviceManager;
     use crate::{
-        device::{device_manager::get_block_device_info, DeviceConfig, DeviceType},
+        device::{device_manager::get_block_driver, DeviceConfig, DeviceType},
         qemu::Qemu,
         BlockConfig, KATA_BLK_DEV_TYPE,
     };
@@ -666,7 +666,7 @@ mod tests {
         assert!(dm.is_ok());
 
         let d = dm.unwrap();
-        let block_driver = get_block_device_info(&d).await.block_device_driver;
+        let block_driver = get_block_driver(&d).await;
         let dev_info = DeviceConfig::BlockCfg(BlockConfig {
             path_on_host: "/dev/dddzzz".to_string(),
             driver_option: block_driver,

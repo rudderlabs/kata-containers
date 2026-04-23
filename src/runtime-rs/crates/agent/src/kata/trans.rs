@@ -28,8 +28,7 @@ use crate::{
         VersionCheckResponse, VolumeStatsRequest, VolumeStatsResponse, WaitProcessRequest,
         WriteStreamRequest,
     },
-    GetGuestDetailsRequest, OomEventResponse, SetPolicyRequest, WaitProcessResponse,
-    WriteStreamResponse,
+    GetGuestDetailsRequest, OomEventResponse, WaitProcessResponse, WriteStreamResponse,
 };
 
 fn trans_vec<F: Sized + Clone, T: From<F>>(from: Vec<F>) -> Vec<T> {
@@ -740,15 +739,6 @@ impl From<GetGuestDetailsRequest> for agent::GuestDetailsRequest {
         Self {
             mem_block_size: from.mem_block_size,
             mem_hotplug_probe: from.mem_hotplug_probe,
-            ..Default::default()
-        }
-    }
-}
-
-impl From<SetPolicyRequest> for agent::SetPolicyRequest {
-    fn from(from: SetPolicyRequest) -> Self {
-        Self {
-            policy: from.policy,
             ..Default::default()
         }
     }

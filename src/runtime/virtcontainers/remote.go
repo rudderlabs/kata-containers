@@ -178,7 +178,7 @@ func notImplemented(name string) error {
 
 	err := errors.Errorf("%s: not implemented", name)
 
-	hvLogger.Error(err.Error())
+	hvLogger.Errorf(err.Error())
 
 	if tracer, ok := err.(interface{ StackTrace() errors.StackTrace }); ok {
 		for _, f := range tracer.StackTrace() {

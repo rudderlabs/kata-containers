@@ -8,7 +8,6 @@
 package virtcontainers
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -155,11 +154,6 @@ func (q *qemuPPC64le) enableProtection() error {
 	default:
 		return fmt.Errorf("This system doesn't support Confidential Computing (Guest Protection)")
 	}
-}
-
-func (q *qemuPPC64le) buildInitdataDevice(ctx context.Context, devices []govmmQemu.Device, initdataImage string) []govmmQemu.Device {
-	hvLogger.Warnf("buildInitdataDevice not implemented for PPC64le; ignoring initdata image: %s", initdataImage)
-	return devices
 }
 
 // append protection device

@@ -177,7 +177,7 @@ pub fn get_linux_mount_info(mount_point: &str) -> Result<LinuxMountInfo> {
 ///
 /// To ensure security, the `create_mount_destination()` function takes an extra parameter `root`,
 /// which is used to ensure that `dst` is within the specified directory. And a safe version of
-/// `PathBuf` is returned to avoid TOCTOU type of flaws.
+/// `PathBuf` is returned to avoid TOCTTOU type of flaws.
 pub fn create_mount_destination<S: AsRef<Path>, D: AsRef<Path>, R: AsRef<Path>>(
     src: S,
     dst: D,
@@ -588,7 +588,7 @@ fn mount_at<P: AsRef<Path>>(
                 }
             }
         })?;
-    child.join().map_err(|e| Error::Join(format!("{e:?}")))?;
+    child.join().map_err(|e| Error::Join(format!("{:?}", e)))?;
 
     if !rx.load(Ordering::Acquire) {
         Err(Error::Mount(
@@ -823,11 +823,11 @@ mod tests {
 
     #[test]
     fn test_get_linux_mount_info() {
-        let info = get_linux_mount_info("/dev/shm").unwrap();
+        let info = get_linux_mount_info("/sys/fs/cgroup").unwrap();
 
         assert_eq!(&info.device, "tmpfs");
         assert_eq!(&info.fs_type, "tmpfs");
-        assert_eq!(&info.path, "/dev/shm");
+        assert_eq!(&info.path, "/sys/fs/cgroup");
 
         assert!(matches!(
             get_linux_mount_info(""),
@@ -1088,7 +1088,7 @@ mod tests {
         assert!(parse_mount_options(&options).is_err());
 
         let idx = options.len() - 1;
-        options[idx] = " ".repeat(*MAX_MOUNT_PARAM_SIZE + 1);
+        options[idx] = " ".repeat(4097);
         assert!(parse_mount_options(&options).is_err());
     }
 

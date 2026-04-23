@@ -49,10 +49,6 @@ impl AgentManager for KataAgent {
     async fn agent_config(&self) -> AgentConfig {
         self.agent_config().await
     }
-
-    async fn disconnect(&self) -> Result<()> {
-        self.disconnect().await.context("disconnect agent")
-    }
 }
 
 // implement for health service
@@ -129,6 +125,5 @@ impl_agent!(
     get_metrics | crate::Empty | crate::MetricsResponse | None,
     get_guest_details | crate::GetGuestDetailsRequest | crate::GuestDetailsResponse | None,
     add_swap | crate::AddSwapRequest | crate::Empty | None,
-    add_swap_path | crate::AddSwapPathRequest | crate::Empty | None,
-    set_policy | crate::SetPolicyRequest | crate::Empty | None
+    add_swap_path | crate::AddSwapPathRequest | crate::Empty | None
 );

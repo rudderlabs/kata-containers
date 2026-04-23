@@ -5,9 +5,7 @@
 
 use std::any::Any;
 use std::io::Error;
-use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
-use std::sync::Mutex;
 
 use vmm_sys_util::eventfd::EventFd;
 
@@ -123,77 +121,6 @@ mod msi {
     }
 }
 
-/// Vector value used to disable MSI for a queue.
-pub const VIRTQ_MSI_NO_VECTOR: u16 = 0xffff;
-
-#[derive(Clone, PartialEq, Debug, Copy)]
-pub enum VirtioInterruptType {
-    Config,
-    Queue(u16),
-}
-
-#[derive(Clone)]
-pub struct VirtioNotifierMsix {
-    pub(crate) config_vector: Arc<AtomicU16>,
-    pub(crate) queues_vectors: Arc<Mutex<Vec<u16>>>,
-    pub(crate) interrupt_source_group: Arc<Box<dyn InterruptSourceGroup>>,
-    pub(crate) interrupt_type: VirtioInterruptType,
-}
-
-impl VirtioNotifierMsix {
-    pub fn new(
-        config_vector: Arc<AtomicU16>,
-        queues_vectors: Arc<Mutex<Vec<u16>>>,
-        interrupt_source_group: Arc<Box<dyn InterruptSourceGroup>>,
-        interrupt_type: VirtioInterruptType,
-    ) -> Self {
-        VirtioNotifierMsix {
-            config_vector,
-            queues_vectors,
-            interrupt_source_group,
-            interrupt_type,
-        }
-    }
-}
-
-impl InterruptNotifier for VirtioNotifierMsix {
-    fn notify(&self) -> std::result::Result<(), std::io::Error> {
-        let vector = match self.interrupt_type {
-            VirtioInterruptType::Config => self.config_vector.load(Ordering::Acquire),
-            VirtioInterruptType::Queue(queue_index) => {
-                self.queues_vectors.lock().unwrap()[queue_index as usize]
-            }
-        };
-        if vector == VIRTQ_MSI_NO_VECTOR {
-            return Ok(());
-        }
-
-        self.interrupt_source_group
-            .trigger(vector as InterruptIndex)
-    }
-    fn notifier(&self) -> Option<&EventFd> {
-        let vector = match self.interrupt_type {
-            VirtioInterruptType::Config => self.config_vector.load(Ordering::Acquire),
-            VirtioInterruptType::Queue(queue_index) => {
-                self.queues_vectors.lock().unwrap()[queue_index as usize]
-            }
-        };
-        if vector == VIRTQ_MSI_NO_VECTOR {
-            return None;
-        }
-
-        self.interrupt_source_group
-            .notifier(vector as InterruptIndex)
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn clone_boxed(&self) -> Box<dyn InterruptNotifier> {
-        Box::new(self.clone())
-    }
-}
-
 /// Struct to discard interrupts.
 #[derive(Copy, Clone, Debug, Default)]
 pub struct NoopNotifier {}
@@ -235,7 +162,6 @@ mod tests {
     use super::*;
 
     use crate::{InterruptManager, InterruptSourceType};
-    use test_utils::skip_if_kvm_unaccessable;
 
     const VIRTIO_INTR_VRING: u32 = 0x01;
     const VIRTIO_INTR_CONFIG: u32 = 0x02;
@@ -251,7 +177,6 @@ mod tests {
     #[cfg(feature = "kvm-legacy-irq")]
     #[test]
     fn test_create_legacy_notifier() {
-        skip_if_kvm_unaccessable!();
         let (_vmfd, irq_manager) = crate::kvm::tests::create_kvm_irq_manager();
         let group = irq_manager
             .create_group(InterruptSourceType::LegacyIrq, 0, 1)
@@ -282,7 +207,6 @@ mod tests {
     #[cfg(feature = "kvm-msi-irq")]
     #[test]
     fn test_virtio_msi_notifier() {
-        skip_if_kvm_unaccessable!();
         let (_vmfd, irq_manager) = crate::kvm::tests::create_kvm_irq_manager();
         let group = irq_manager
             .create_group(InterruptSourceType::MsiIrq, 0, 3)

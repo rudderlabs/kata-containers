@@ -10,9 +10,8 @@ source "${BATS_TEST_DIRNAME}/../../common.bash"
 
 load "${BATS_TEST_DIRNAME}/confidential_kbs.sh"
 
-SUPPORTED_GPU_TEE_HYPERVISORS=("qemu-nvidia-gpu-snp" "qemu-nvidia-gpu-tdx")
-SUPPORTED_TEE_HYPERVISORS=("qemu-snp" "qemu-tdx" "qemu-se" "qemu-se-runtime-rs" "${SUPPORTED_GPU_TEE_HYPERVISORS[@]}")
-SUPPORTED_NON_TEE_HYPERVISORS=("qemu-coco-dev" "qemu-coco-dev-runtime-rs")
+SUPPORTED_TEE_HYPERVISORS=("qemu-snp" "qemu-tdx" "qemu-se")
+SUPPORTED_NON_TEE_HYPERVISORS=("qemu-coco-dev")
 
 function setup_unencrypted_confidential_pod() {
 	get_pod_config_dir
@@ -32,20 +31,12 @@ function setup_unencrypted_confidential_pod() {
 # and returns the remote command to be executed to that specific hypervisor
 # in order to identify whether the workload is running on a TEE environment
 function get_remote_command_per_hypervisor() {
-	case "${KATA_HYPERVISOR}" in
-		qemu-se*)
-			echo "cd /sys/firmware/uv; cat prot_virt_guest | grep 1"
-			;;
-		qemu-snp)
-			echo "dmesg | grep \"Memory Encryption Features active:.*SEV-SNP\""
-			;;
-		qemu-tdx)
-			echo "cpuid | grep TDX_GUEST"
-			;;
-		*)
-			echo ""
-			;;
-	esac
+	declare -A REMOTE_COMMAND_PER_HYPERVISOR
+	REMOTE_COMMAND_PER_HYPERVISOR[qemu-snp]="dmesg | grep \"Memory Encryption Features active:.*SEV-SNP\""
+	REMOTE_COMMAND_PER_HYPERVISOR[qemu-tdx]="cpuid | grep TDX_GUEST"
+	REMOTE_COMMAND_PER_HYPERVISOR[qemu-se]="cd /sys/firmware/uv; cat prot_virt_guest | grep 1"
+
+	echo "${REMOTE_COMMAND_PER_HYPERVISOR[${KATA_HYPERVISOR}]}"
 }
 
 # This function verifies whether the input hypervisor supports confidential tests and
@@ -68,21 +59,7 @@ function check_hypervisor_for_confidential_tests_tee_only() {
 	local kata_hypervisor="${1}"
 	# This check must be done with "<SPACE>${KATA_HYPERVISOR}<SPACE>" to avoid
 	# having substrings, like qemu, being matched with qemu-$something.
-	# shellcheck disable=SC2076 # intentionally use literal string matching
 	if [[ " ${SUPPORTED_TEE_HYPERVISORS[*]} " =~ " ${kata_hypervisor} " ]]; then
-		return 0
-	fi
-
-	return 1
-}
-
-# This function verifies whether the input hypervisor supports confidential GPU tests
-function check_hypervisor_for_confidential_gpu_tests() {
-	local kata_hypervisor="${1}"
-	# This check must be done with "<SPACE>${kata_hypervisor}<SPACE>" to avoid
-	# having substrings being matched incorrectly.
-	# shellcheck disable=SC2076 # intentionally use literal string matching
-	if [[ " ${SUPPORTED_GPU_TEE_HYPERVISORS[*]} " =~ " ${kata_hypervisor} " ]]; then
 		return 0
 	fi
 
@@ -107,25 +84,12 @@ function is_confidential_hardware() {
 	return 1
 }
 
-# Common check for confidential GPU hardware tests.
-function is_confidential_gpu_hardware() {
-	if check_hypervisor_for_confidential_gpu_tests "${KATA_HYPERVISOR}"; then
-		return 0
-	fi
-
-	return 1
-}
-
-# create_loop_device creates a loop device backed by a file.
-# $1: loop file path (default: /tmp/trusted-image-storage.img)
-# $2: size in MiB, i.e. dd bs=1M count=... (default: 2500, ~2.4Gi)
 function create_loop_device(){
 	local loop_file="${1:-/tmp/trusted-image-storage.img}"
-	local size_mb="${2:-2500}"
 	local node="$(get_one_kata_node)"
 	cleanup_loop_device "$loop_file"
 
-	exec_host "$node" "dd if=/dev/zero of=$loop_file bs=1M count=$size_mb"
+	exec_host "$node" "dd if=/dev/zero of=$loop_file bs=1M count=2500"
 	exec_host "$node" "losetup -fP $loop_file >/dev/null 2>&1"
 	local device=$(exec_host "$node" losetup -j $loop_file | awk -F'[: ]' '{print $1}')
 
@@ -210,7 +174,7 @@ function create_coco_pod_yaml() {
 # This function creates pod yaml. Parameters
 # - $1: image reference
 # - $2: annotation `io.katacontainers.config.hypervisor.kernel_params`
-# - $3: annotation `io.katacontainers.config.hypervisor.cc_init_data`
+# - $3: anootation `io.katacontainers.config.runtime.cc_init_data`
 # - $4: node
 function create_coco_pod_yaml_with_annotations() {
 	image=$1
@@ -219,7 +183,7 @@ function create_coco_pod_yaml_with_annotations() {
 	node=${4:-}
 
 	kernel_params_annotation_key="io.katacontainers.config.hypervisor.kernel_params"
-	cc_initdata_annotation_key="io.katacontainers.config.hypervisor.cc_init_data"
+	cc_initdata_annotation_key="io.katacontainers.config.runtime.cc_init_data"
 
 	# Note: this is not local as we use it in the caller test
 	kata_pod="$(new_pod_config "$image" "kata-${KATA_HYPERVISOR}")"
@@ -236,136 +200,11 @@ function create_coco_pod_yaml_with_annotations() {
 		"${cc_initdata_annotation_key}" \
 		"${cc_initdata_annotation_value}"
 
+	add_allow_all_policy_to_yaml "${kata_pod}"
+
 	if [ -n "$node" ]; then
 		set_node "${kata_pod}" "$node"
 	fi
-}
-
-# Sealed secrets (signed JWS ES256). Pre-created with guest-components secret CLI; see
-# https://github.com/confidential-containers/guest-components/blob/main/confidential-data-hub/docs/SEALED_SECRET.md
-# Tests provision the signing public key to KBS and use these pre-created sealed secret strings.
-#
-# To regenerate the signing key and sealed secrets:
-# Install required dependencies, clone guest-components repository and change to guest-components/confidential-data-hub
-# Create private and public JWK, for example:
-# python3 -c "
-# from jwcrypto import jwk
-# k = jwk.JWK.generate(kty='EC', crv='P-256', alg='ES256', use='sig', kid='sealed-secret-test-key')
-# with open('signing-key-private.jwk', 'w') as f:
-#     f.write(k.export_private())
-# with open('signing-key-public.jwk', 'w') as f:
-#     f.write(k.export_public())
-# print('Created signing-key-private.jwk and signing-key-public.jwk')
-# "
-#
-# Build the secret CLI:
-# cargo build -p confidential-data-hub --bin secret
-#
-# Create the sealed secret test secret:
-# cargo run -p confidential-data-hub --bin secret -q -- seal \
-#   --signing-kid "kbs:///default/signing-key/sealed-secret" \
-#   --signing-jwk-path ./signing-key-private.jwk \
-#   vault --resource-uri "kbs:///default/sealed-secret/test" --provider kbs
-#
-# Create the NIM test instruct secret:
-# cargo run -p confidential-data-hub --bin secret -q -- seal \
-#   --signing-kid "kbs:///default/signing-key/sealed-secret" \
-#   --signing-jwk-path ./signing-key-private.jwk \
-#   vault --resource-uri "kbs:///default/ngc-api-key/instruct" --provider kbs
-#
-# Create the NIM test embedqa secret:
-# cargo run -p confidential-data-hub --bin secret -q -- seal \
-#   --signing-kid "kbs:///default/signing-key/sealed-secret" \
-#   --signing-jwk-path ./signing-key-private.jwk \
-#   vault --resource-uri "kbs:///default/ngc-api-key/embedqa" --provider kbs
-#
-# Public JWK (no private key) used to verify the pre-created sealed secrets. Must match the key pair
-# that was used to sign SEALED_SECRET_PRECREATED_*.
-SEALED_SECRET_SIGNING_PUBLIC_JWK='{"alg":"ES256","crv":"P-256","kid":"sealed-secret-test-key","kty":"EC","use":"sig","x":"4jH376AuwTUCIx65AJ_56D7SZzWf7sGcEA7_Csq21UM","y":"rjdceysnSa5ZfzWOPGCURMUuHndxBAGUu4ISTIVN0yA"}'
-
-# Pre-created sealed secret for k8s-sealed-secret.bats (points to kbs:///default/sealed-secret/test)
-export SEALED_SECRET_PRECREATED_TEST="sealed.eyJiNjQiOnRydWUsImFsZyI6IkVTMjU2Iiwia2lkIjoia2JzOi8vL2RlZmF1bHQvc2lnbmluZy1rZXkvc2VhbGVkLXNlY3JldCJ9.eyJ2ZXJzaW9uIjoiMC4xLjAiLCJ0eXBlIjoidmF1bHQiLCJuYW1lIjoia2JzOi8vL2RlZmF1bHQvc2VhbGVkLXNlY3JldC90ZXN0IiwicHJvdmlkZXIiOiJrYnMiLCJwcm92aWRlcl9zZXR0aW5ncyI6e30sImFubm90YXRpb25zIjp7fX0.ZI2fTv5ramHqHQa9DKBFD5hlJ_Mjf6cEIcpsNGshpyhEiKklML0abfH600TD7LAFHf53oDIJmEcVsDtJ20UafQ"
-
-# Pre-created sealed secrets for k8s-nvidia-nim.bats (point to kbs:///default/ngc-api-key/instruct and embedqa)
-export SEALED_SECRET_PRECREATED_NIM_INSTRUCT="sealed.eyJiNjQiOnRydWUsImFsZyI6IkVTMjU2Iiwia2lkIjoia2JzOi8vL2RlZmF1bHQvc2lnbmluZy1rZXkvc2VhbGVkLXNlY3JldCJ9.eyJ2ZXJzaW9uIjoiMC4xLjAiLCJ0eXBlIjoidmF1bHQiLCJuYW1lIjoia2JzOi8vL2RlZmF1bHQvbmdjLWFwaS1rZXkvaW5zdHJ1Y3QiLCJwcm92aWRlciI6ImticyIsInByb3ZpZGVyX3NldHRpbmdzIjp7fSwiYW5ub3RhdGlvbnMiOnt9fQ.wpqvVFUaQymqgf54h70shZWDpk2NLW305wALz09YF0GKFBKBQiQB2sRwvn9Jk_rSju3YGLYxPO2Ub8qUbiMCuA"
-export SEALED_SECRET_PRECREATED_NIM_EMBEDQA="sealed.eyJiNjQiOnRydWUsImFsZyI6IkVTMjU2Iiwia2lkIjoia2JzOi8vL2RlZmF1bHQvc2lnbmluZy1rZXkvc2VhbGVkLXNlY3JldCJ9.eyJ2ZXJzaW9uIjoiMC4xLjAiLCJ0eXBlIjoidmF1bHQiLCJuYW1lIjoia2JzOi8vL2RlZmF1bHQvbmdjLWFwaS1rZXkvZW1iZWRxYSIsInByb3ZpZGVyIjoia2JzIiwicHJvdmlkZXJfc2V0dGluZ3MiOnt9LCJhbm5vdGF0aW9ucyI6e319.4C1uqtVXi_qZT8vh_yZ4KpsRdgr2s4hU6ElKj18Hq1DJi_Iji61yuKsS6S1jWdb7drdoKKACvMD6RmCd85SJOQ"
-
-# Provision the signing public key to KBS so CDH can verify the pre-created sealed secrets.
-function setup_sealed_secret_signing_public_key() {
-	kbs_set_resource "default" "signing-key" "sealed-secret" "${SEALED_SECRET_SIGNING_PUBLIC_JWK}"
-}
-
-function get_initdata_with_cdh_image_section() {
-	CDH_IMAGE_SECTION=${1:-""}
-
-	CC_KBS_ADDRESS=$(kbs_k8s_svc_http_addr)
-
-	 initdata_annotation=$(gzip -c << EOF | base64 -w0
-version = "0.1.0"
-algorithm = "sha256"
-[data]
-"aa.toml" = '''
-[token_configs]
-[token_configs.kbs]
-url = "${CC_KBS_ADDRESS}"
-'''
-
-"cdh.toml" = '''
-[kbc]
-name = "cc_kbc"
-url = "${CC_KBS_ADDRESS}"
-
-${CDH_IMAGE_SECTION}
-'''
-
-"policy.rego" = '''
-# Copyright (c) 2023 Microsoft Corporation
-#
-# SPDX-License-Identifier: Apache-2.0
-#
-
-package agent_policy
-
-default AddARPNeighborsRequest := true
-default AddSwapRequest := true
-default CloseStdinRequest := true
-default CopyFileRequest := true
-default CreateContainerRequest := true
-default CreateSandboxRequest := true
-default DestroySandboxRequest := true
-default ExecProcessRequest := true
-default GetMetricsRequest := true
-default GetOOMEventRequest := true
-default GuestDetailsRequest := true
-default ListInterfacesRequest := true
-default ListRoutesRequest := true
-default MemHotplugByProbeRequest := true
-default OnlineCPUMemRequest := true
-default PauseContainerRequest := true
-default PullImageRequest := true
-default ReadStreamRequest := true
-default RemoveContainerRequest := true
-default RemoveStaleVirtiofsShareMountsRequest := true
-default ReseedRandomDevRequest := true
-default ResumeContainerRequest := true
-default SetGuestDateTimeRequest := true
-default SetPolicyRequest := true
-default SignalProcessRequest := true
-default StartContainerRequest := true
-default StartTracingRequest := true
-default StatsContainerRequest := true
-default StopTracingRequest := true
-default TtyWinResizeRequest := true
-default UpdateContainerRequest := true
-default UpdateEphemeralMountsRequest := true
-default UpdateInterfaceRequest := true
-default UpdateRoutesRequest := true
-default WaitProcessRequest := true
-default WriteStreamRequest := true
-'''
-EOF
-    )
-    echo "${initdata_annotation}"
 }
 
 confidential_teardown_common() {

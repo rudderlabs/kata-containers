@@ -6,50 +6,43 @@
 
 use crate::health_check::HealthCheck;
 use agent::kata::KataAgent;
-use agent::types::{KernelModule, SetPolicyRequest};
+use agent::types::KernelModule;
 use agent::{
     self, Agent, GetGuestDetailsRequest, GetIPTablesRequest, SetIPTablesRequest, VolumeStatsRequest,
 };
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
+use common::message::{Action, Message};
 use common::types::utils::option_system_time_into;
 use common::types::ContainerProcess;
-use common::{
-    message::{Action, Message},
-    types::DEFAULT_SHM_SIZE,
-};
 use common::{
     types::{SandboxConfig, SandboxExitInfo, SandboxStatus},
     ContainerManager, Sandbox, SandboxNetworkEnv,
 };
 
 use containerd_shim_protos::events::task::{TaskExit, TaskOOM};
+use hypervisor::PortDeviceConfig;
 use hypervisor::VsockConfig;
 use hypervisor::HYPERVISOR_FIRECRACKER;
 use hypervisor::HYPERVISOR_REMOTE;
 #[cfg(feature = "dragonball")]
 use hypervisor::{dragonball::Dragonball, HYPERVISOR_DRAGONBALL};
 use hypervisor::{qemu::Qemu, HYPERVISOR_QEMU};
-use hypervisor::{
-    utils::{get_hvsock_path, uses_native_ccw_bus},
-    HybridVsockConfig, DEFAULT_GUEST_VSOCK_CID,
-};
+use hypervisor::{utils::get_hvsock_path, HybridVsockConfig, DEFAULT_GUEST_VSOCK_CID};
 use hypervisor::{BlockConfig, Hypervisor};
-use hypervisor::{BlockDeviceAio, PortDeviceConfig};
 use hypervisor::{ProtectionDeviceConfig, SevSnpConfig, TdxConfig};
 use kata_sys_util::hooks::HookStates;
 use kata_sys_util::protection::{available_guest_protection, GuestProtection};
-use kata_sys_util::spec::load_oci_spec;
 use kata_types::capabilities::CapabilityBits;
 use kata_types::config::hypervisor::Hypervisor as HypervisorConfig;
 use kata_types::config::hypervisor::HYPERVISOR_NAME_CH;
-use kata_types::config::{hypervisor::Factory, TomlConfig};
+use kata_types::config::TomlConfig;
 use kata_types::initdata::{calculate_initdata_digest, ProtectedPlatform};
 use oci_spec::runtime as oci;
 use persist::{self, sandbox_persist::Persist};
 use protobuf::SpecialFields;
 use resource::coco_data::initdata::{
-    kata_shared_init_data_path, InitDataConfig, KATA_INIT_DATA_IMAGE,
+    InitDataConfig, KATA_INIT_DATA_IMAGE, KATA_SHARED_INIT_DATA_PATH,
 };
 use resource::coco_data::initdata_block;
 use resource::manager::ManagerArgs;
@@ -99,8 +92,6 @@ pub struct VirtSandbox {
     hypervisor: Arc<dyn Hypervisor>,
     monitor: Arc<HealthCheck>,
     sandbox_config: Option<SandboxConfig>,
-    shm_size: u64,
-    factory: Option<Factory>,
 }
 
 impl std::fmt::Debug for VirtSandbox {
@@ -108,13 +99,6 @@ impl std::fmt::Debug for VirtSandbox {
         f.debug_struct("VirtSandbox")
             .field("sid", &self.sid)
             .field("msg_sender", &self.msg_sender)
-            .field("inner", &"<SandboxInner>")
-            .field("resource_manager", &self.resource_manager)
-            .field("agent", &"<Agent>")
-            .field("hypervisor", &self.hypervisor)
-            .field("monitor", &"<HealthCheck>")
-            .field("sandbox_config", &self.sandbox_config)
-            .field("factory", &self.factory)
             .finish()
     }
 }
@@ -127,7 +111,6 @@ impl VirtSandbox {
         hypervisor: Arc<dyn Hypervisor>,
         resource_manager: Arc<ResourceManager>,
         sandbox_config: SandboxConfig,
-        factory: Factory,
     ) -> Result<Self> {
         let config = resource_manager.config().await;
         let keep_abnormal = config.runtime.keep_abnormal;
@@ -139,22 +122,8 @@ impl VirtSandbox {
             hypervisor,
             resource_manager,
             monitor: Arc::new(HealthCheck::new(true, keep_abnormal)),
-            shm_size: sandbox_config.shm_size,
             sandbox_config: Some(sandbox_config),
-            factory: Some(factory),
         })
-    }
-
-    pub fn get_agent(&self) -> Arc<dyn Agent> {
-        self.agent.clone()
-    }
-
-    pub fn get_sid(&self) -> String {
-        self.sid.clone()
-    }
-
-    pub fn get_hypervisor(&self) -> Arc<dyn Hypervisor> {
-        self.hypervisor.clone()
     }
 
     #[instrument]
@@ -361,11 +330,7 @@ impl VirtSandbox {
         }
 
         if boot_info.image.is_empty() {
-            let is_remote_hypervisor = Arc::clone(&self.resource_manager.config().await)
-                .runtime
-                .hypervisor_name
-                == "remote";
-            if (uses_native_ccw_bus() && security_info.confidential_guest) || is_remote_hypervisor {
+            if boot_info.vm_rootfs_driver.ends_with("ccw") && security_info.confidential_guest {
                 return Ok(None);
             } else {
                 return Err(anyhow!("both of image and initrd isn't set"));
@@ -378,28 +343,6 @@ impl VirtSandbox {
             driver_option: boot_info.vm_rootfs_driver,
             ..Default::default()
         }))
-    }
-
-    async fn set_agent_policy(&self) -> Result<()> {
-        // TODO: Exclude policy-related items from the annotations.
-        let toml_config = self.resource_manager.config().await;
-        if let Some(agent_config) = toml_config.agent.get(&toml_config.runtime.agent_name) {
-            // If a Policy has been specified, send it to the agent.
-            if !agent_config.policy.is_empty() {
-                info!(
-                    sl!(),
-                    "Setting Agent Policy with {:?}.", &agent_config.policy
-                );
-                self.agent
-                    .set_policy(SetPolicyRequest {
-                        policy: agent_config.policy.clone(),
-                    })
-                    .await
-                    .context("sandbox: set policy failed")?;
-            }
-        }
-
-        Ok(())
     }
 
     async fn prepare_vm_socket_config(&self) -> Result<ResourceConfig> {
@@ -431,23 +374,11 @@ impl VirtSandbox {
         hypervisor_config: &HypervisorConfig,
         init_data: Option<String>,
     ) -> Result<Option<ProtectionDeviceConfig>> {
-        let available_protection = available_guest_protection()?;
-        // We need to cover the following case:
-        // - Required to run Kata containers in TEE environment
-        // E.g., available_guest_protection() returns Se, but confidential_guest is not set.
-        // Unless the configuration is skipped, the VM will fail to start
-        // due to lack of a secure boot image for IBM SEL
-        if available_protection != GuestProtection::NoProtection
-            && !hypervisor_config.security_info.confidential_guest
-        {
-            info!(
-                sl!(),
-                "confidential_guest is not set while {:?} protection is detected, \
-                 skipping protection device config",
-                available_protection
-            );
+        if !hypervisor_config.security_info.confidential_guest {
             return Ok(None);
         }
+
+        let available_protection = available_guest_protection()?;
         info!(
             sl!(),
             "sandbox: available protection: {:?}", available_protection
@@ -462,7 +393,6 @@ impl VirtSandbox {
                 Ok(Some(ProtectionDeviceConfig::SevSnp(SevSnpConfig {
                     is_snp: false,
                     cbitpos: details.cbitpos,
-                    phys_addr_reduction: details.phys_addr_reduction,
                     firmware: hypervisor_config.boot_info.firmware.clone(),
                     host_data: None,
                 })))
@@ -483,7 +413,6 @@ impl VirtSandbox {
                 Ok(Some(ProtectionDeviceConfig::SevSnp(SevSnpConfig {
                     is_snp,
                     cbitpos: details.cbitpos,
-                    phys_addr_reduction: details.phys_addr_reduction,
                     firmware: hypervisor_config.boot_info.firmware.clone(),
                     host_data: init_data,
                 })))
@@ -500,7 +429,6 @@ impl VirtSandbox {
                     debug: false,
                 })))
             },
-            GuestProtection::NoProtection => Ok(None),
             _ => Err(anyhow!("confidential_guest requested by configuration but no supported protection available"))
         }
     }
@@ -513,7 +441,7 @@ impl VirtSandbox {
         if initdata.is_empty() {
             return Ok(None);
         }
-        debug!(sl!(), "Init Data Content String: {:?}", &initdata);
+        info!(sl!(), "Init Data Content String: {:?}", &initdata);
         let available_protection = available_guest_protection()?;
         info!(
             sl!(),
@@ -524,17 +452,16 @@ impl VirtSandbox {
             GuestProtection::Snp(_details) => {
                 calculate_initdata_digest(&initdata, ProtectedPlatform::Snp)?
             }
-            GuestProtection::Se => calculate_initdata_digest(&initdata, ProtectedPlatform::Se)?,
-            GuestProtection::NoProtection => {
-                calculate_initdata_digest(&initdata, ProtectedPlatform::NoProtection)?
-            }
             // TODO: there's more `GuestProtection` types to be supported.
             _ => return Ok(None),
         };
-        info!(sl!(), "initdata  digest {:?}", &initdata_digest);
+        info!(
+            sl!(),
+            "calculate initdata: {:?} with initdata  digest {:?}", &initdata, &initdata_digest
+        );
 
         // initdata within compressed rawblock
-        let image_path = Path::new(kata_shared_init_data_path().as_str())
+        let image_path = Path::new(KATA_SHARED_INIT_DATA_PATH)
             .join(&self.sid)
             .join(KATA_INIT_DATA_IMAGE);
         initdata_block::push_data(&image_path, &initdata)?;
@@ -542,12 +469,11 @@ impl VirtSandbox {
             sl!(),
             "initdata push data into compressed block: {:?}", &image_path
         );
-        let block_driver = &hypervisor_config.blockdev_info.block_device_driver;
+        let block_driver = &hypervisor_config.boot_info.vm_rootfs_driver;
         let block_config = BlockConfig {
             path_on_host: image_path.display().to_string(),
             is_readonly: true,
             driver_option: block_driver.clone(),
-            blkdev_aio: BlockDeviceAio::Native,
             ..Default::default()
         };
         let initdata_config = InitDataConfig(block_config, initdata_digest);
@@ -584,18 +510,12 @@ impl Sandbox for VirtSandbox {
             warn!(sl!(), "sandbox is started");
             return Ok(());
         }
-        let selinux_label = load_oci_spec().ok().and_then(|spec| {
-            spec.process()
-                .as_ref()
-                .and_then(|process| process.selinux_label().clone())
-        });
 
         self.hypervisor
             .prepare_vm(
                 id,
                 sandbox_config.network_env.netns.clone(),
                 &sandbox_config.annotations,
-                selinux_label,
             )
             .await
             .context("prepare vm")?;
@@ -672,7 +592,6 @@ impl Sandbox for VirtSandbox {
             .start(&address)
             .await
             .context(format!("connect to address {:?}", &address))?;
-        self.set_agent_policy().await.context("set agent policy")?;
 
         self.resource_manager
             .setup_after_start_vm()
@@ -687,7 +606,7 @@ impl Sandbox for VirtSandbox {
             dns: sandbox_config.dns.clone(),
             storages: self
                 .resource_manager
-                .get_storage_for_sandbox(self.shm_size)
+                .get_storage_for_sandbox()
                 .await
                 .context("get storages for sandbox")?,
             sandbox_pidns: false,
@@ -748,58 +667,6 @@ impl Sandbox for VirtSandbox {
         });
         self.monitor.start(id, self.agent.clone());
         self.save().await.context("save state")?;
-        Ok(())
-    }
-
-    /// Core function for starting a VM from a template
-    ///
-    /// This function is responsible for creating and starting a VM sandbox from a predefined template,
-    /// serving as the core implementation of the template mechanism.
-    async fn start_template(&self) -> Result<()> {
-        info!(sl!(), "sandbox::start_template()"; "sandbox:" => format!("{:?}", self));
-        let id = &self.sid;
-
-        let sandbox_config = self.sandbox_config.as_ref().unwrap();
-
-        // if sandbox is not in SandboxState::Init then return,
-        // otherwise try to create sandbox
-        let inner = self.inner.write().await;
-        if inner.state != SandboxState::Init {
-            return Ok(());
-        }
-        let selinux_label = load_oci_spec().ok().and_then(|spec| {
-            spec.process()
-                .as_ref()
-                .and_then(|process| process.selinux_label().clone())
-        });
-
-        self.hypervisor
-            .prepare_vm(
-                id,
-                sandbox_config.network_env.netns.clone(),
-                &sandbox_config.annotations,
-                selinux_label,
-            )
-            .await
-            .context("prepare vm")?;
-
-        // generate device and setup before start vm
-        // should after hypervisor.prepare_vm
-        let resources = self
-            .prepare_for_start_sandbox(id, sandbox_config.network_env.clone())
-            .await
-            .context("prepare resources before start vm")?;
-
-        self.resource_manager
-            .prepare_before_start_vm(resources)
-            .await
-            .context("set up device before start vm")?;
-
-        self.hypervisor
-            .start_vm(10_000)
-            .await
-            .context("start template vm")?;
-        info!(sl!(), "vm started from template");
         Ok(())
     }
 
@@ -972,24 +839,6 @@ impl Sandbox for VirtSandbox {
     async fn hypervisor_metrics(&self) -> Result<String> {
         self.hypervisor.get_hypervisor_metrics().await
     }
-
-    async fn set_policy(&self, policy: &str) -> Result<()> {
-        if policy.is_empty() {
-            debug!(sl!(), "sb: set_policy skipped without policy");
-            return Ok(());
-        }
-
-        info!(sl!(), "sb: set_policy invoked");
-        let policy_req = SetPolicyRequest {
-            policy: policy.to_string(),
-        };
-        self.agent
-            .set_policy(policy_req)
-            .await
-            .context("sandbox: failed to set policy")?;
-
-        Ok(())
-    }
 }
 
 #[async_trait]
@@ -1073,8 +922,6 @@ impl Persist for VirtSandbox {
             resource_manager,
             monitor: Arc::new(HealthCheck::new(true, keep_abnormal)),
             sandbox_config: None,
-            shm_size: DEFAULT_SHM_SIZE,
-            factory: None,
         })
     }
 }

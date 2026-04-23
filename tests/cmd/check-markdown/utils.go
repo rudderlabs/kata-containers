@@ -79,7 +79,7 @@ func createHeadingID(headingName string) (id string, err error) {
 	id = strings.Map(validHeadingIDChar, headingName)
 
 	id = strings.ToLower(id)
-	id = strings.ReplaceAll(id, " ", "-")
+	id = strings.Replace(id, " ", "-", -1)
 
 	return id, nil
 }
