@@ -49,7 +49,8 @@ impl TryFrom<&str> for PciSlot {
 
         let base = 16;
         let n = u64::from_str_radix(s, base).context(format!(
-            "convert string to number with base {base:?} failed."
+            "convert string to number with base {:?} failed.",
+            base
         ))?;
         if n >> PCI_SLOT_BITS > 0 {
             return Err(anyhow!(

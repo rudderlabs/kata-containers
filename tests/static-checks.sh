@@ -20,6 +20,8 @@ source "${cidir}/common.bash"
 # set GO111MODULE to "auto" to enable module-aware mode only when
 # a go.mod file is present in the current directory.
 export GO111MODULE="auto"
+export test_path="${test_path:-github.com/kata-containers/kata-containers/tests}"
+export test_dir="${GOPATH}/src/${test_path}"
 
 # List of files to delete on exit
 files_to_remove=()
@@ -103,7 +105,6 @@ long_options=(
 	[no-arch]="Run/list all tests except architecture-specific ones"
 	[only-arch]="Only run/list architecture-specific tests"
 	[repo:]="Specify GitHub URL of repo to use (github.com/user/repo)"
-	[repo-path:]="Specify path to repository to check (default: \$GOPATH/src/\$repo)"
 	[scripts]="Check script files"
 	[vendor]="Check vendor files"
 	[versions]="Check versions files"
@@ -124,7 +125,7 @@ usage()
 	cat <<EOF
 
 Usage: $script_name help
-       $script_name [options] [repo-name] [true]
+       $script_name [options] repo-name [true]
 
 Options:
 
@@ -174,7 +175,7 @@ Examples:
 
 - Auto-detect repository and run golang tests for current repository:
 
-  $ $script_name --golang
+  $ KATA_DEV_MODE=true $script_name --golang
 
 - Run all tests on the kata-containers repository, forcing the tests to
   consider all files, not just those changed by a PR branch:
@@ -441,7 +442,6 @@ static_check_license_headers()
 
 		local missing=$(grep \
 			--exclude=".git/*" \
-			--exclude=".editorconfig" \
 			--exclude=".gitignore" \
 			--exclude=".dockerignore" \
 			--exclude="Gopkg.lock" \
@@ -596,6 +596,19 @@ check_url()
 
 		local curl_ua_args
 		[ -n "$user_agent" ] && curl_ua_args="-A '$user_agent'"
+
+		{ run_url_check_cmd "$url" "$curl_out" "$curl_ua_args"; ret=$?; } || true
+
+		# A transitory error, or the URL is incorrect,
+		# but capture either way.
+		if [ "$ret" -ne 0 ]; then
+			errors+=("Failed to check URL '$url' (user agent: '$user_agent', return code $ret)")
+
+			# Try again with another UA since it appears that some return codes
+			# indicate the server was unhappy with the details
+			# presented by the client.
+			continue
+		fi
 
 		local http_statuses
 
@@ -769,7 +782,6 @@ static_check_docs()
 
 	exclude_doc_regexs+=(^CODE_OF_CONDUCT\.md$)
 	exclude_doc_regexs+=(^CONTRIBUTING\.md$)
-	exclude_doc_regexs+=(^SECURITY\.md$)
 
 	# Magic github template files
 	exclude_doc_regexs+=(^\.github/.*\.md$)
@@ -786,12 +798,128 @@ static_check_docs()
 	# Convert the list of files into an grep(1) alternation pattern.
 	exclude_pattern=$(echo "${exclude_doc_regexs[@]}"|sed 's, ,|,g')
 
+	# Every document in the repo (except a small handful of exceptions)
+	# should be referenced by another document.
+	for doc in $md_docs_to_check
+	do
+		# Check the ignore list for markdown files that do not need to
+		# be referenced by others.
+		echo "$doc"|grep -q -E "(${exclude_pattern})" && continue
+
+		grep -q "$doc" "$md_links" || die "Document $doc is not referenced"
+	done
+
 	info "Checking document code blocks"
 
 	local doc_to_script_cmd="${cidir}/kata-doc-to-script.sh"
 
+	for doc in $docs
+	do
+		bash "${doc_to_script_cmd}" -csv "$doc"
+
+		# Look for URLs in the document
+		urls=$("${doc_to_script_cmd}" -i "$doc" - | "$cmd")
+
+		# Gather URLs
+		for url in $urls
+		do
+			printf "%s\t%s\n" "${url}" "${doc}" >> "$url_map"
+		done
+	done
+
+	# Get unique list of URLs
+	urls=$(awk '{print $1}' "$url_map" | sort -u)
+
+	info "Checking all document URLs"
+	local invalid_urls_dir=$(mktemp -d)
+	files_to_remove+=("${invalid_urls_dir}")
+
+	for url in $urls
+	do
+		if [ "$specific_branch" != "true" ]
+		then
+			# If the URL is new on this PR, it cannot be checked.
+			echo "$new_urls" | grep -q -E "\<${url}\>" && \
+				info "ignoring new (but correct) URL: $url" && continue
+		fi
+
+		# Ignore local URLs. The only time these are used is in
+		# examples (meaning these URLs won't exist).
+		echo "$url" | grep -q "^file://" && continue
+		echo "$url" | grep -q "^http://localhost" && continue
+
+		# Ignore the install guide URLs that contain a shell variable
+		echo "$url" | grep -q "\\$" && continue
+
+		# This prefix requires the client to be logged in to github, so ignore
+		echo "$url" | grep -q 'https://github.com/pulls' && continue
+
+		# Sigh.
+		echo "$url"|grep -q 'https://example.com' && continue
+
+		# Google APIs typically require an auth token.
+		echo "$url"|grep -q 'https://www.googleapis.com' && continue
+
+		# Git repo URL check
+		if echo "$url"|grep -q '^https.*git'
+		then
+			timeout "${KATA_NET_TIMEOUT}" git ls-remote "$url" > /dev/null 2>&1 && continue
+		fi
+
+		# Check the URL, saving it if invalid
+		#
+		# Each URL is checked in a separate process as each unique URL
+		# requires us to hit the network.
+		check_url "$url" "$invalid_urls_dir" &
+	done
+
 	# Synchronisation point
 	wait
+
+	# Combine all the separate invalid URL files into one
+	local invalid_files=$(ls "$invalid_urls_dir")
+
+	if [ -n "$invalid_files" ]; then
+		pushd "$invalid_urls_dir" &>/dev/null
+		cat $(echo "$invalid_files"|tr '\n' ' ') > "$invalid_urls"
+		popd &>/dev/null
+	fi
+
+	if [ -s "$invalid_urls" ]
+	then
+		local files
+
+		cat "$invalid_urls" | while read url
+		do
+			files=$(grep "^${url}" "$url_map" | awk '{print $2}' | sort -u)
+			echo >&2 -e "ERROR: Invalid URL '$url' found in the following files:\n"
+
+			for file in $files
+			do
+				echo >&2 "$file"
+			done
+		done
+
+		exit 1
+	fi
+
+	# Now, spell check the docs
+	cmd="${test_dir}/cmd/check-spelling/kata-spell-check.sh"
+
+	local docs_failed=0
+	for doc in $docs
+	do
+		"$cmd" check "$doc" || { info "spell check failed for document $doc" && docs_failed=1; }
+
+		static_check_eof "$doc"
+	done
+
+	popd
+
+	[ $docs_failed -eq 0 ] || {
+        url='https://github.com/kata-containers/kata-containers/blob/main/docs/Documentation-Requirements.md#spelling'
+        die "spell check failed, See $url for more information."
+    }
 }
 
 static_check_eof()
@@ -1103,7 +1231,10 @@ has_hadolint_or_install()
 	local linter_dest="${GOPATH}/bin/hadolint"
 
 	local has_linter=$(command -v "$linter_cmd")
-	if [ -n "$has_linter" ]; then
+	if [[ -z "$has_linter" && "$KATA_DEV_MODE" == "yes" ]]; then
+		# Do not install if it is in development mode.
+		die "$linter_cmd command not found. You must have the version $linter_version installed to run this check."
+	elif [ -n "$has_linter" ]; then
 		# Check if the expected linter version
 		if $linter_cmd --version | grep -v "$linter_version" &>/dev/null; then
 			warn "$linter_cmd command found but not the required version $linter_version"
@@ -1388,8 +1519,6 @@ main()
 
 	local func=
 
-	repo_path=""
-
 	while [ $# -gt 1 ]
 	do
 		case "$1" in
@@ -1410,7 +1539,6 @@ main()
 			--only-arch) handle_funcs="arch-specific" ;;
 			--rego) func=static_check_rego ;;
 			--repo) repo="$2"; shift ;;
-			--repo-path) repo_path="$2"; shift ;;
 			--scripts) func=static_check_shell ;;
 			--vendor) func=static_check_vendor;;
 			--versions) func=static_check_versions ;;
@@ -1432,22 +1560,23 @@ main()
 
 	if [ -z "$repo" ]
 	then
-		# No repo param provided so assume it's the current
-		# one to avoid developers having to specify one now
-		# (backwards compatability).
-		repo=$(git config --get remote.origin.url |\
-			sed 's!https://!!g' || true)
-		info "Auto-detected repo as $repo"
+		if [ -n "$KATA_DEV_MODE" ]
+		then
+			# No repo param provided so assume it's the current
+			# one to avoid developers having to specify one now
+			# (backwards compatability).
+			repo=$(git config --get remote.origin.url |\
+				sed 's!https://!!g' || true)
+
+			info "Auto-detected repo as $repo"
+		else
+			if [ "$list_only" != "true" ]; then
+				echo >&2 "ERROR: need repo" && usage && exit 1
+			fi
+		fi
 	fi
 
-	test_path="${test_path:-"${repo}/tests"}"
-	test_dir="${GOPATH}/src/${test_path}"
-
-	if [ -z "$repo_path" ]; then
-		repo_path=$GOPATH/src/$repo
-	else
-		test_dir=$repo_path/$test_path
-	fi
+	repo_path=$GOPATH/src/$repo
 
 	announce
 

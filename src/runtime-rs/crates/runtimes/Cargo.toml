@@ -11,7 +11,6 @@ lazy_static = { workspace = true }
 netns-rs = { workspace = true }
 slog = { workspace = true }
 slog-scope = { workspace = true }
-containerd-shim-protos = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 tracing = { workspace = true }
 tracing-opentelemetry = { workspace = true }
@@ -27,19 +26,18 @@ opentelemetry-jaeger = { version = "0.17.0", features = [
 ] }
 tracing-subscriber = { version = "0.3", features = ["registry", "std"] }
 hyper = { workspace = true, features = ["stream", "server", "http1"] }
+hyperlocal = { workspace = true }
 serde_json = { workspace = true }
 nix = "0.25.0"
 url = { workspace = true }
 procfs = "0.12.0"
-prometheus = { version = "0.14.0", features = ["process"] }
+prometheus = { version = "0.13.0", features = ["process"] }
 oci-spec = { workspace = true }
 
 # Local dependencies
 agent = { workspace = true }
 common = { workspace = true }
 kata-types = { workspace = true }
-protocols = { workspace = true }
-protobuf = { workspace = true }
 kata-sys-util = { workspace = true }
 logging = { workspace = true }
 runtime-spec = { workspace = true }
@@ -58,6 +56,3 @@ default = ["virt"]
 linux = ["linux_container"]
 virt = ["virt_container"]
 wasm = ["wasm_container"]
-
-dragonball = ["virt_container/dragonball"]
-cloud-hypervisor = ["virt_container/cloud-hypervisor"]

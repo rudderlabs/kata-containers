@@ -1,21 +1,23 @@
-# Multi-VMM Support for runtime-rs
+# Multi-vmm support for runtime-rs
 
 ## 0. Status
 
-Multiple external hypervisors are supported in the Rust runtime, including QEMU, Firecracker, and Cloud Hypervisor. This document outlines the key implementation details for multi-VMM support in the Rust runtime.
+External hypervisor support is currently being developed.
 
-## 1. Hypervisor Configuration
+See [the main tracking issue](https://github.com/kata-containers/kata-containers/issues/4634)
+for further details.
 
-The diagram below provides an overview of the hypervisor configuration:
+Some key points for supporting multi-vmm in rust runtime.
+## 1. Hypervisor Config
+
+The diagram below gives an overview for the hypervisor config
 
 ![hypervisor config](../../docs/images/hypervisor-config.svg)
 
-VMM configuration information is loaded during runtime instance initialization. The following key functions are critical to this process:
-
+VMM's config info will be loaded when initialize the runtime instance, there are some important functions need to be focused on. 
 ### `VirtContainer::init()`
 
-This function initializes the runtime handler and registers plugins into the `HYPERVISOR_PLUGINS` registry. Different hypervisors require different plugins:
-
+This function initialize the runtime handler. It will register the plugins into the HYPERVISOR_PLUGINS. Different plugins are needed for different hypervisors. 
 ```rust
 #[async_trait]
 impl RuntimeHandler for VirtContainer {
@@ -28,24 +30,21 @@ impl RuntimeHandler for VirtContainer {
 }
 ```
 
-Currently, the QEMU plugin is fully implemented, we can take it as an example. The QEMU plugin defines methods to adjust and validate the hypervisor configuration file. These methods can be customized as needed.
+[This is the plugin method for QEMU. Other VMM plugin methods haven't support currently.](../../../libs/kata-types/src/config/hypervisor/qemu.rs)
+QEMU plugin defines the methods to adjust and validate the hypervisor config file, those methods could be modified if it is needed.
 
-Details of the QEMU plugin implementation can be found in [QEMU Plugin Implementation](../../../libs/kata-types/src/config/hypervisor/qemu.rs)
-
-When loading the TOML configuration, the registered plugins are invoked to adjust and validate the configuration file:
-
+After that, when loading the TOML config, the plugins will be called to adjust and validate the config file.
 ```rust
-async fn try_init(&mut self, spec: &oci::Spec) -> Result<()> {
+async fn try_init(&mut self, spec: &oci::Spec) -> Result<()> {、
     ...
     let config = load_config(spec).context("load config")?;
     ...
 }
 ```
 
-### `new_instance`
+### new_instance
 
-This function creates a runtime instance that manages container and sandbox operations. During this process, a hypervisor instance is created. For QEMU, the hypervisor instance is instantiated and configured with the appropriate configuration file:
-
+This function will create a runtime_instance which include the operations for container and sandbox.  At the same time, a hypervisor instance will be created.  QEMU instance will be created here as well, and set the hypervisor config file
 ```rust
 async fn new_hypervisor(toml_config: &TomlConfig) -> Result<Arc<dyn Hypervisor>> {
     let hypervisor_name = &toml_config.runtime.hypervisor_name;
@@ -71,8 +70,7 @@ async fn new_hypervisor(toml_config: &TomlConfig) -> Result<Arc<dyn Hypervisor>>
 
 ## 2. Hypervisor Trait
 
-[The hypervisor trait must be implemented to support multi-VMM architectures.](./src/lib.rs)
-
+[To support multi-vmm, the hypervisor trait need to be implemented.](./src/lib.rs)
 ```rust
 pub trait Hypervisor: Send + Sync {
     // vm manager
@@ -82,11 +80,11 @@ pub trait Hypervisor: Send + Sync {
     async fn pause_vm(&self) -> Result<()>;
     async fn save_vm(&self) -> Result<()>;
     async fn resume_vm(&self) -> Result<()>;
-
+    
     // device manager
     async fn add_device(&self, device: device::Device) -> Result<()>;
     async fn remove_device(&self, device: device::Device) -> Result<()>;
-
+    
     // utils
     async fn get_agent_socket(&self) -> Result<String>;
     async fn disconnect(&self);
@@ -99,7 +97,6 @@ pub trait Hypervisor: Send + Sync {
     async fn save_state(&self) -> Result<HypervisorState>;
    }
 ```
-
-In the current design, the VM startup process follows these steps:
+In current design, VM will be started in the following steps.
 
 ![vmm start](../../docs/images/vm-start.svg)

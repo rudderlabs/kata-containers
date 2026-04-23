@@ -564,9 +564,10 @@ impl VirtioDeviceInfo {
     /// Unregister event handler for the device.
     pub fn remove_event_handler(&mut self, id: SubscriberId) -> Result<EpollSubscriber> {
         self.epoll_manager.remove_subscriber(id).map_err(|e| {
-            Error::IOError(std::io::Error::other(format!(
-                "remove_event_handler failed: {e:?}"
-            )))
+            Error::IOError(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("remove_event_handler failed: {e:?}"),
+            ))
         })
     }
 }
@@ -578,7 +579,6 @@ pub(crate) mod tests {
     };
     use dbs_utils::epoll_manager::{EventOps, Events, MutEventSubscriber};
     use kvm_ioctls::Kvm;
-    use test_utils::skip_if_kvm_unaccessable;
     use virtio_queue::QueueSync;
     use vm_memory::{GuestMemoryAtomic, GuestMemoryMmap, GuestMemoryRegion, MmapRegion};
 
@@ -629,7 +629,6 @@ pub(crate) mod tests {
 
     #[test]
     fn test_create_virtio_queue_config() {
-        skip_if_kvm_unaccessable!();
         let (_vmfd, irq_manager) = crate::tests::create_vm_and_irq_manager();
         let group = irq_manager
             .create_group(InterruptSourceType::LegacyIrq, 0, 1)
@@ -649,7 +648,7 @@ pub(crate) mod tests {
         );
 
         let desc = cfg.get_next_descriptor(mem.memory()).unwrap();
-        assert!(desc.is_none());
+        assert!(matches!(desc, None));
 
         cfg.notify().unwrap();
         assert_eq!(cfg.index(), 1);
@@ -661,7 +660,6 @@ pub(crate) mod tests {
 
     #[test]
     fn test_clone_virtio_queue_config() {
-        skip_if_kvm_unaccessable!();
         let (_vmfd, irq_manager) = crate::tests::create_vm_and_irq_manager();
         let group = irq_manager
             .create_group(InterruptSourceType::LegacyIrq, 0, 1)
@@ -681,12 +679,12 @@ pub(crate) mod tests {
         );
 
         let desc = cfg.get_next_descriptor(mem.memory()).unwrap();
-        assert!(desc.is_none());
+        assert!(matches!(desc, None));
 
         {
             let mut guard = cfg.queue_mut().lock();
             let mut iter = guard.iter(mem.memory()).unwrap();
-            assert!(iter.next().is_none());
+            assert!(matches!(iter.next(), None));
         }
 
         cfg.notify().unwrap();
@@ -700,7 +698,6 @@ pub(crate) mod tests {
 
     #[test]
     fn test_create_virtio_device_config() {
-        skip_if_kvm_unaccessable!();
         let mut device_config = create_virtio_device_config();
 
         device_config.notify_device_changes().unwrap();
@@ -786,7 +783,6 @@ pub(crate) mod tests {
 
     #[test]
     fn test_virtio_device() {
-        skip_if_kvm_unaccessable!();
         let epoll_mgr = EpollManager::default();
 
         let avail_features = 0x1234 << 32 | 0x4567;
@@ -841,7 +837,7 @@ pub(crate) mod tests {
         assert_eq!(data, vec![1; 16]);
 
         // test config space invalid write
-        let write_data = [0xffu8; 16];
+        let write_data = vec![0xffu8; 16];
         let mut read_data = vec![0x0; 16];
         assert_eq!(
             device.write_config(4, &write_data[..13]).unwrap_err(),

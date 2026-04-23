@@ -7,7 +7,6 @@ use async_trait::async_trait;
 use rustjail::{pipestream::PipeStream, process::StreamType};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf};
 use tokio::sync::Mutex;
-use tokio::time::{timeout, Duration};
 
 use std::convert::TryFrom;
 use std::ffi::{CString, OsStr};
@@ -15,7 +14,6 @@ use std::fmt::Debug;
 use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
-#[cfg(target_arch = "s390x")]
 use std::str::FromStr;
 use std::sync::Arc;
 use ttrpc::{
@@ -74,7 +72,7 @@ use crate::network::setup_guest_dns;
 use crate::passfd_io;
 use crate::pci;
 use crate::random;
-use crate::sandbox::{Sandbox, SandboxError};
+use crate::sandbox::Sandbox;
 use crate::storage::{add_storages, update_ephemeral_mounts, STORAGE_HANDLERS};
 use crate::util;
 use crate::version::{AGENT_VERSION, API_VERSION};
@@ -97,6 +95,7 @@ use libc::{self, c_char, c_ushort, pid_t, winsize, TIOCSWINSZ};
 use std::fs;
 use std::os::unix::prelude::PermissionsExt;
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use nix::unistd::{Gid, Uid};
 use std::fs::{File, OpenOptions};
@@ -139,17 +138,7 @@ fn sl() -> slog::Logger {
 
 // Convenience function to wrap an error and response to ttrpc client
 pub fn ttrpc_error(code: ttrpc::Code, err: impl Debug) -> ttrpc::Error {
-    get_rpc_status(code, format!("{err:?}"))
-}
-
-/// Convert SandboxError to ttrpc error with appropriate code.
-/// Process not found errors map to NOT_FOUND, others to INVALID_ARGUMENT.
-fn sandbox_err_to_ttrpc(err: SandboxError) -> ttrpc::Error {
-    let code = match &err {
-        SandboxError::InitProcessNotFound | SandboxError::InvalidExecId => ttrpc::Code::NOT_FOUND,
-        SandboxError::InvalidContainerId => ttrpc::Code::INVALID_ARGUMENT,
-    };
-    ttrpc_error(code, err)
+    get_rpc_status(code, format!("{:?}", err))
 }
 
 #[cfg(not(feature = "agent-policy"))]
@@ -471,9 +460,7 @@ impl AgentService {
         let mut sig: libc::c_int = req.signal as libc::c_int;
         {
             let mut sandbox = self.sandbox.lock().await;
-            let p = sandbox
-                .find_container_process(cid.as_str(), eid.as_str())
-                .map_err(sandbox_err_to_ttrpc)?;
+            let p = sandbox.find_container_process(cid.as_str(), eid.as_str())?;
             // For container initProcess, if it hasn't installed handler for "SIGTERM" signal,
             // it will ignore the "SIGTERM" signal sent to it, thus send it "SIGKILL" signal
             // instead of "SIGTERM" to terminate it.
@@ -581,9 +568,7 @@ impl AgentService {
         let (exit_send, mut exit_recv) = tokio::sync::mpsc::channel(100);
         let exit_rx = {
             let mut sandbox = self.sandbox.lock().await;
-            let p = sandbox
-                .find_container_process(cid.as_str(), eid.as_str())
-                .map_err(sandbox_err_to_ttrpc)?;
+            let p = sandbox.find_container_process(cid.as_str(), eid.as_str())?;
 
             p.exit_watchers.push(exit_send);
             pid = p.pid;
@@ -680,9 +665,7 @@ impl AgentService {
         let term_exit_notifier;
         let reader = {
             let mut sandbox = self.sandbox.lock().await;
-            let p = sandbox
-                .find_container_process(cid.as_str(), eid.as_str())
-                .map_err(sandbox_err_to_ttrpc)?;
+            let p = sandbox.find_container_process(cid.as_str(), eid.as_str())?;
 
             term_exit_notifier = p.term_exit_notifier.clone();
 
@@ -701,66 +684,25 @@ impl AgentService {
 
         let reader = reader.ok_or_else(|| anyhow!("cannot get stream reader"))?;
 
-        // Create one in-flight read future and reuse it in both branches.
-        let read_fut = read_stream(&reader, req.len as usize);
-        tokio::pin!(read_fut);
-
-        // Cancellation and polling model: Rust async is polled, not preempted.
-        // `Future::poll()` is a synchronous function call that runs to completion and
-        // returns Ready or Pending (`std::future::Future`).
-        // Readiness notifications (Waker::wake / Tokio Notify) only schedule the task
-        // to be polled again later; they do not interrupt an in-progress poll.
-        // Therefore, a Notify becoming ready while `poll_read()` is executing cannot cause
-        // the read future to be dropped mid-way; cancellation can only happen when the branch
-        // is still pending between polls (Tokio `select!` cancels by dropping non-selected futures).
-        // Detailed information, please refer to Tokio doc for more information:
-        // - Future::poll: https://doc.rust-lang.org/std/future/trait.Future.html
-        // - Waker: https://doc.rust-lang.org/std/task/struct.Waker.html
-        // - Tokio select!: https://docs.rs/tokio/latest/tokio/macro.select.html
-        let data = tokio::select! {
-            // Use `biased` to make the polling order deterministic (top-to-bottom).
-            // This ensures that *when multiple branches are ready at the same time*,
-            // we prefer reading pending output over reacting to the exit notification.
-            //
-            // Note: `biased` does NOT guarantee that we won't lose output. If the exit
-            // notification becomes ready while `read_stream` is still pending, the
-            // exit branch may be selected and we may stop reading before draining the
-            // remaining buffered data.
-            //
-            // Detailed information, please refer to Tokio doc for more information:
-            // https://docs.rs/tokio/latest/src/tokio/macros/select.rs.html#67
+        tokio::select! {
+            // Poll the futures in the order they appear from top to bottom
+            // it is very important to avoid data loss. If there is still
+            // data in the buffer and read_stream branch will return
+            // Poll::Ready so that the term_exit_notifier will never polled
+            // before all data were read.
             biased;
+            v = read_stream(&reader, req.len as usize)  => {
+                let vector = v?;
 
-            v = &mut read_fut => v?,
-            _ = term_exit_notifier.notified() => {
-                // Drain-after-exit rationale:
-                // The process has exited, but the data may still be buffered in the pipe/pty.
-                // We should keep waiting for the same in-flight read for a bounded window to drain the data.
-                //
-                // It enters this branch only if `term_exit_notifier.notified()` fires. It then try to "drain"
-                // any remaining buffered output for a short, bounded time window:
-                // - If non-empty data is read: return immediately.
-                // - else then return empty data as EOF.
+                let mut resp = ReadStreamResponse::new();
+                resp.set_data(vector);
 
-                const DRAIN_DEADLINE_MS: u64 = 500; // 500ms
-                let deadline = Duration::from_millis(DRAIN_DEADLINE_MS);
-
-                // Attempt to drain remaining buffered output after process exit
-                // Try reading with timeout
-                match timeout(deadline, &mut read_fut).await {
-                    Ok(v) => v?, // got data or EOF (empty)
-                    _ => {
-                        warn!(sl(), "exit-drain timeout, return EOF"; "container-id" => cid, "exec-id" => eid);
-                        Vec::new() // Return empty as EOF
-                    }
-                }
+                Ok(resp)
             }
-        };
-
-        let mut resp = ReadStreamResponse::new();
-        resp.set_data(data);
-
-        Ok(resp)
+            _ = term_exit_notifier.notified() => {
+                Err(anyhow!("eof"))
+            }
+        }
     }
 }
 
@@ -1005,7 +947,12 @@ impl agent_ttrpc::AgentService for AgentService {
 
         let p = sandbox
             .find_container_process(cid.as_str(), eid.as_str())
-            .map_err(sandbox_err_to_ttrpc)?;
+            .map_err(|e| {
+                ttrpc_error(
+                    ttrpc::Code::INVALID_ARGUMENT,
+                    format!("invalid argument: {:?}", e),
+                )
+            })?;
 
         p.close_stdin().await;
 
@@ -1023,7 +970,12 @@ impl agent_ttrpc::AgentService for AgentService {
         let mut sandbox = self.sandbox.lock().await;
         let p = sandbox
             .find_container_process(req.container_id(), req.exec_id())
-            .map_err(sandbox_err_to_ttrpc)?;
+            .map_err(|e| {
+                ttrpc_error(
+                    ttrpc::Code::UNAVAILABLE,
+                    format!("invalid argument: {:?}", e),
+                )
+            })?;
 
         let fd = p
             .term_master
@@ -1038,7 +990,7 @@ impl agent_ttrpc::AgentService for AgentService {
         let err = unsafe { libc::ioctl(fd, TIOCSWINSZ, &win) };
         Errno::result(err)
             .map(drop)
-            .map_ttrpc_err(|e| format!("ioctl error: {e:?}"))?;
+            .map_ttrpc_err(|e| format!("ioctl error: {:?}", e))?;
 
         Ok(Empty::new())
     }
@@ -1061,22 +1013,21 @@ impl agent_ttrpc::AgentService for AgentService {
         if !interface.devicePath.is_empty() {
             #[cfg(not(target_arch = "s390x"))]
             {
-                let (root_complex, pcipath) = pcipath_from_dev_tree_path(&interface.devicePath)
-                    .map_ttrpc_err(|e| {
-                        format!("Invalid PCI path for network interface: {:?}", e)
-                    })?;
-                wait_for_pci_net_interface(&self.sandbox, root_complex, &pcipath)
+                let pcipath = pci::Path::from_str(&interface.devicePath).map_ttrpc_err(|e| {
+                    format!("Unexpected pci-path for network interface: {:?}", e)
+                })?;
+                wait_for_pci_net_interface(&self.sandbox, &pcipath)
                     .await
-                    .map_ttrpc_err(|e| format!("interface not available: {e:?}"))?;
+                    .map_ttrpc_err(|e| format!("interface not available: {:?}", e))?;
             }
             #[cfg(target_arch = "s390x")]
             {
                 let ccw_dev = ccw::Device::from_str(&interface.devicePath).map_ttrpc_err(|e| {
-                    format!("Unexpected CCW path for network interface: {e:?}")
+                    format!("Unexpected CCW path for network interface: {:?}", e)
                 })?;
                 wait_for_ccw_net_interface(&self.sandbox, &ccw_dev)
                     .await
-                    .map_ttrpc_err(|e| format!("interface not available: {e:?}"))?;
+                    .map_ttrpc_err(|e| format!("interface not available: {:?}", e))?;
             }
         }
 
@@ -1086,7 +1037,7 @@ impl agent_ttrpc::AgentService for AgentService {
             .rtnl
             .update_interface(&interface)
             .await
-            .map_ttrpc_err(|e| format!("update interface: {e:?}"))?;
+            .map_ttrpc_err(|e| format!("update interface: {:?}", e))?;
 
         Ok(interface)
     }
@@ -1111,13 +1062,13 @@ impl agent_ttrpc::AgentService for AgentService {
             .rtnl
             .update_routes(new_routes)
             .await
-            .map_ttrpc_err(|e| format!("Failed to update routes: {e:?}"))?;
+            .map_ttrpc_err(|e| format!("Failed to update routes: {:?}", e))?;
 
         let list = sandbox
             .rtnl
             .list_routes()
             .await
-            .map_ttrpc_err(|e| format!("Failed to list routes after update: {e:?}"))?;
+            .map_ttrpc_err(|e| format!("Failed to list routes after update: {:?}", e))?;
 
         Ok(protocols::agent::Routes {
             Routes: list,
@@ -1135,7 +1086,7 @@ impl agent_ttrpc::AgentService for AgentService {
 
         update_ephemeral_mounts(sl(), &req.storages, &self.sandbox)
             .await
-            .map_ttrpc_err(|e| format!("Failed to update mounts: {e:?}"))?;
+            .map_ttrpc_err(|e| format!("Failed to update mounts: {:?}", e))?;
         Ok(Empty::new())
     }
 
@@ -1286,7 +1237,7 @@ impl agent_ttrpc::AgentService for AgentService {
             .rtnl
             .list_interfaces()
             .await
-            .map_ttrpc_err(|e| format!("Failed to list interfaces: {e:?}"))?;
+            .map_ttrpc_err(|e| format!("Failed to list interfaces: {:?}", e))?;
 
         Ok(protocols::agent::Interfaces {
             Interfaces: list,
@@ -1309,7 +1260,7 @@ impl agent_ttrpc::AgentService for AgentService {
             .rtnl
             .list_routes()
             .await
-            .map_ttrpc_err(|e| format!("list routes: {e:?}"))?;
+            .map_ttrpc_err(|e| format!("list routes: {:?}", e))?;
 
         Ok(protocols::agent::Routes {
             Routes: list,
@@ -1426,7 +1377,7 @@ impl agent_ttrpc::AgentService for AgentService {
             .rtnl
             .add_arp_neighbors(neighs)
             .await
-            .map_ttrpc_err(|e| format!("Failed to add ARP neighbours: {e:?}"))?;
+            .map_ttrpc_err(|e| format!("Failed to add ARP neighbours: {:?}", e))?;
 
         Ok(Empty::new())
     }
@@ -1646,7 +1597,7 @@ impl agent_ttrpc::AgentService for AgentService {
             ma.memcg_set_config_async(mem_agent_memcgconfig_to_memcg_optionconfig(&config))
                 .await
                 .map_err(|e| {
-                    let estr = format!("ma.memcg_set_config_async fail: {e}");
+                    let estr = format!("ma.memcg_set_config_async fail: {}", e);
                     error!(sl(), "{}", estr);
                     ttrpc::Error::RpcStatus(ttrpc::get_status(ttrpc::Code::INTERNAL, estr))
                 })?;
@@ -1670,7 +1621,7 @@ impl agent_ttrpc::AgentService for AgentService {
             ma.compact_set_config_async(mem_agent_compactconfig_to_compact_optionconfig(&config))
                 .await
                 .map_err(|e| {
-                    let estr = format!("ma.compact_set_config_async fail: {e}");
+                    let estr = format!("ma.compact_set_config_async fail: {}", e);
                     error!(sl(), "{}", estr);
                     ttrpc::Error::RpcStatus(ttrpc::get_status(ttrpc::Code::INTERNAL, estr))
                 })?;
@@ -1815,6 +1766,10 @@ async fn read_stream(reader: &Mutex<ReadHalf<PipeStream>>, l: usize) -> Result<V
     let mut reader = reader.lock().await;
     let len = reader.read(&mut content).await?;
     content.resize(len, 0);
+
+    if len == 0 {
+        return Err(anyhow!("read meet eof"));
+    }
 
     Ok(content)
 }
@@ -2164,9 +2119,7 @@ async fn do_add_swap(sandbox: &Arc<Mutex<Sandbox>>, req: &AddSwapRequest) -> Res
         slots.push(pci::SlotFn::new(*slot, 0)?);
     }
     let pcipath = pci::Path::new(slots)?;
-    // Default all virtio devices to root_complex 00 aka pcie.0
-    let root_complex = "00";
-    let dev_name = get_virtio_blk_pci_device_name(sandbox, root_complex, &pcipath).await?;
+    let dev_name = get_virtio_blk_pci_device_name(sandbox, &pcipath).await?;
 
     let c_str = CString::new(dev_name)?;
     let ret = unsafe { libc::swapon(c_str.as_ptr() as *const c_char, 0) };
@@ -2280,8 +2233,10 @@ fn load_kernel_module(module: &protocols::agent::KernelModule) -> Result<()> {
         Some(code) => {
             let std_out = String::from_utf8_lossy(&output.stdout);
             let std_err = String::from_utf8_lossy(&output.stderr);
-            let msg =
-                format!("load_kernel_module return code: {code} stdout:{std_out} stderr:{std_err}");
+            let msg = format!(
+                "load_kernel_module return code: {} stdout:{} stderr:{}",
+                code, std_out, std_err
+            );
             Err(anyhow!(msg))
         }
         None => Err(anyhow!("Process terminated by signal")),
@@ -2308,6 +2263,9 @@ fn is_sealed_secret_path(source_path: &str) -> bool {
 }
 
 async fn cdh_handler_trusted_storage(oci: &mut Spec) -> Result<()> {
+    if !confidential_data_hub::is_cdh_client_initialized() {
+        return Ok(());
+    }
     let linux = oci
         .linux()
         .as_ref()
@@ -2317,63 +2275,30 @@ async fn cdh_handler_trusted_storage(oci: &mut Spec) -> Result<()> {
         for specdev in devices.iter() {
             if specdev.path().as_path().to_str() == Some(TRUSTED_IMAGE_STORAGE_DEVICE) {
                 let dev_major_minor = format!("{}:{}", specdev.major(), specdev.minor());
-                cdh_secure_mount(
-                    "block-device",
-                    &dev_major_minor,
-                    "luks2",
+                let secure_storage_integrity = AGENT_CONFIG.secure_storage_integrity.to_string();
+                info!(
+                    sl(),
+                    "trusted_store device major:min {}, enable data integrity {}",
+                    dev_major_minor,
+                    secure_storage_integrity
+                );
+
+                let options = std::collections::HashMap::from([
+                    ("deviceId".to_string(), dev_major_minor),
+                    ("encryptType".to_string(), "LUKS".to_string()),
+                    ("dataIntegrity".to_string(), secure_storage_integrity),
+                ]);
+                confidential_data_hub::secure_mount(
+                    "BlockDevice",
+                    &options,
+                    vec![],
                     KATA_IMAGE_WORK_DIR,
-                    "-E lazy_journal_init",
                 )
                 .await?;
                 break;
             }
         }
     }
-    Ok(())
-}
-
-pub(crate) async fn cdh_secure_mount(
-    device_type: &str,
-    device_id: &str,
-    encrypt_type: &str,
-    mount_point: &str,
-    mkfs_opts: &str,
-) -> Result<()> {
-    if !confidential_data_hub::is_cdh_client_initialized() {
-        return Ok(());
-    }
-
-    let integrity = AGENT_CONFIG.secure_storage_integrity.to_string();
-
-    info!(
-        sl(),
-        "cdh_secure_mount: device_type {}, device_id {}, encrypt_type {}, integrity {}, mkfs_opts {}",
-        device_type,
-        device_id,
-        encrypt_type,
-        integrity,
-        mkfs_opts
-    );
-
-    let options = std::collections::HashMap::from([
-        ("deviceId".to_string(), device_id.to_string()),
-        ("sourceType".to_string(), "empty".to_string()),
-        ("targetType".to_string(), "fileSystem".to_string()),
-        ("filesystemType".to_string(), "ext4".to_string()),
-        ("mkfsOpts".to_string(), mkfs_opts.to_string()),
-        ("encryptionType".to_string(), encrypt_type.to_string()),
-        ("dataIntegrity".to_string(), integrity),
-    ]);
-
-    std::fs::create_dir_all(mount_point).inspect_err(|e| {
-        error!(
-            sl(),
-            "Failed to create mount point directory {}: {:?}", mount_point, e
-        );
-    })?;
-
-    confidential_data_hub::secure_mount(device_type, &options, vec![], mount_point).await?;
-
     Ok(())
 }
 
@@ -2492,7 +2417,7 @@ mod tests {
         let cgroups_path = format!(
             "/{}/dummycontainer{}",
             CGROUP_PARENT,
-            since_the_epoch.as_micros()
+            since_the_epoch.as_millis()
         );
 
         let spec = SpecBuilder::default()
@@ -2556,26 +2481,6 @@ mod tests {
         // normally this module should eixsts...
         m.name = "bridge".to_string();
         let result = load_kernel_module(&m);
-
-        // Skip test if loading kernel modules is not permitted
-        // or kernel module is not found
-        if let Err(e) = &result {
-            let error_string = format!("{e:?}");
-            // Let's print out the error message first
-            println!("DEBUG: error: {error_string}");
-            if error_string.contains("Operation not permitted")
-                || error_string.contains("EPERM")
-                || error_string.contains("Permission denied")
-            {
-                println!("INFO: skipping test - loading kernel modules is not permitted in this environment");
-                return;
-            }
-            if error_string.contains("not found") {
-                println!("INFO: skipping test - kernel module is not found in this environment");
-                return;
-            }
-        }
-
         assert!(result.is_ok(), "load module should success");
     }
 
@@ -2704,12 +2609,12 @@ mod tests {
             },
             TestData {
                 create_container: false,
-                result: Err(anyhow!(crate::sandbox::SandboxError::InvalidContainerId)),
+                result: Err(anyhow!(crate::sandbox::ERR_INVALID_CONTAINER_ID)),
                 ..Default::default()
             },
             TestData {
                 container_id: "8181",
-                result: Err(anyhow!(crate::sandbox::SandboxError::InvalidContainerId)),
+                result: Err(anyhow!(crate::sandbox::ERR_INVALID_CONTAINER_ID)),
                 ..Default::default()
             },
             TestData {
@@ -2723,7 +2628,7 @@ mod tests {
         ];
 
         for (i, d) in tests.iter().enumerate() {
-            let msg = format!("test[{i}]: {d:?}");
+            let msg = format!("test[{}]: {:?}", i, d);
 
             let logger = slog::Logger::root(slog::Discard, o!());
             let mut sandbox = Sandbox::new(&logger).unwrap();
@@ -2794,7 +2699,7 @@ mod tests {
             // the fd will be closed on Process's dropping.
             // unistd::close(wfd).unwrap();
 
-            let msg = format!("{msg}, result: {result:?}");
+            let msg = format!("{}, result: {:?}", msg, result);
             assert_result!(d.result, result, msg);
         }
     }
@@ -2898,7 +2803,7 @@ mod tests {
         ];
 
         for (i, d) in tests.iter().enumerate() {
-            let msg = format!("test[{i}]: {d:?}");
+            let msg = format!("test[{}]: {:?}", i, d);
 
             let logger = slog::Logger::root(slog::Discard, o!());
             let mut sandbox = Sandbox::new(&logger).unwrap();
@@ -2918,14 +2823,15 @@ mod tests {
 
             let result = update_container_namespaces(&sandbox, &mut oci, d.use_sandbox_pidns);
 
-            let msg = format!("{msg}, result: {result:?}");
+            let msg = format!("{}, result: {:?}", msg, result);
 
             assert_result!(d.result, result, msg);
             if let Some(linux) = oci.linux() {
                 assert_eq!(
                     d.expected_namespaces,
                     linux.namespaces().clone().unwrap(),
-                    "{msg}"
+                    "{}",
+                    msg
                 );
             }
         }
@@ -3018,7 +2924,7 @@ mod tests {
         ];
 
         for (i, d) in tests.iter().enumerate() {
-            let msg = format!("test[{i}]: {d:?}");
+            let msg = format!("test[{}]: {:?}", i, d);
 
             let dir = tempdir().expect("failed to make tempdir");
             let block_size_path = dir.path().join("block_size_bytes");
@@ -3038,7 +2944,7 @@ mod tests {
                 hotplug_probe_path.to_str().unwrap(),
             );
 
-            let msg = format!("{msg}, result: {result:?}");
+            let msg = format!("{}, result: {:?}", msg, result);
 
             assert_result!(d.result, result, msg);
         }
@@ -3148,7 +3054,7 @@ OtherField:other
         ];
 
         for (i, d) in tests.iter().enumerate() {
-            let msg = format!("test[{i}]: {d:?}");
+            let msg = format!("test[{}]: {:?}", i, d);
 
             let dir = tempdir().expect("failed to make tempdir");
             let proc_status_file_path = dir.path().join("status");
@@ -3159,9 +3065,9 @@ OtherField:other
 
             let result = is_signal_handled(proc_status_file_path.to_str().unwrap(), d.signum);
 
-            let msg = format!("{msg}, result: {result:?}");
+            let msg = format!("{}, result: {:?}", msg, result);
 
-            assert_eq!(d.result, result, "{msg}");
+            assert_eq!(d.result, result, "{}", msg);
         }
     }
 
@@ -3460,9 +3366,9 @@ COMMIT
         ];
 
         for (i, d) in tests.iter().enumerate() {
-            let msg = format!("test[{i}]: {d:?}");
+            let msg = format!("test[{}]: {:?}", i, d);
             let result = is_sealed_secret_path(d.source_path);
-            assert_eq!(d.result, result, "{msg}");
+            assert_eq!(d.result, result, "{}", msg);
         }
     }
 }

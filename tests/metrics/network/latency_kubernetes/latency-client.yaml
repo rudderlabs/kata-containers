@@ -7,6 +7,7 @@ kind: Pod
 metadata:
   name: latency-client
 spec:
+  terminationGracePeriodSeconds: 0
   runtimeClassName: kata
   containers:
     - name: client-container

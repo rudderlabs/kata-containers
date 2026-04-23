@@ -84,9 +84,6 @@ const (
 	// KernelParams is a sandbox annotation for passing additional guest kernel parameters.
 	KernelParams = kataAnnotHypervisorPrefix + "kernel_params"
 
-	// KernelVerityParams is a sandbox annotation for passing guest dm-verity parameters.
-	KernelVerityParams = kataAnnotHypervisorPrefix + "kernel_verity_params"
-
 	// MachineType is a sandbox annotation to specify the type of machine being emulated by the hypervisor.
 	MachineType = kataAnnotHypervisorPrefix + "machine_type"
 
@@ -185,9 +182,6 @@ const (
 	// FileBackedMemRootDir is a sandbox annotation to soecify file based memory backend root directory
 	FileBackedMemRootDir = kataAnnotHypervisorPrefix + "file_mem_backend"
 
-	// NUMAMapping is a sandbox annotation that specifies mapping VM NUMA nodes to host NUMA nodes.
-	NUMAMapping = kataAnnotHypervisorPrefix + "numa_mapping"
-
 	//
 	// Shared File System related annotations
 	//
@@ -224,12 +218,8 @@ const (
 	DisableBlockDeviceUse = kataAnnotHypervisorPrefix + "disable_block_device_use"
 
 	// EnableIOThreads is a sandbox annotation to enable IO to be processed in a separate thread.
-	// Supported currently for virtio-scsi and virtio-blk(based on IndepIOThreads) driver.
+	// Supported currently for virtio-scsi driver.
 	EnableIOThreads = kataAnnotHypervisorPrefix + "enable_iothreads"
-
-	// Independent IOThreads enables IO to be processed in a separate thread, it is
-	// for QEMU hotplug device attach to iothread, like virtio-blk.
-	IndepIOThreads = kataAnnotHypervisorPrefix + "indep_iothreads"
 
 	// BlockDeviceCacheSet is a sandbox annotation that specifies cache-related options will be set to block devices or not.
 	BlockDeviceCacheSet = kataAnnotHypervisorPrefix + "block_device_cache_set"
@@ -241,21 +231,6 @@ const (
 	// BlockDeviceCacheNoflush is a sandbox annotation that specifies cache-related options for block devices.
 	// Denotes whether flush requests for the device are ignored.
 	BlockDeviceCacheNoflush = kataAnnotHypervisorPrefix + "block_device_cache_noflush"
-
-	// BlockDeviceLogicalSectorSize is a sandbox annotation that specifies the logical sector size
-	// reported by block devices to the guest, in bytes. Common values are 512 and 4096.
-	// Set to 0 to use the hypervisor default.
-	// NOTE: the annotation key uses the abbreviated "blk_logical_sector_size" rather than
-	// "block_device_logical_sector_size" (as used in the config file) because Kubernetes
-	// enforces a 63-character limit on annotation name segments, and the full name with the
-	// "io.katacontainers.config.hypervisor." prefix would exceed that limit.
-	BlockDeviceLogicalSectorSize = kataAnnotHypervisorPrefix + "blk_logical_sector_size"
-
-	// BlockDevicePhysicalSectorSize is a sandbox annotation that specifies the physical sector size
-	// reported by block devices to the guest, in bytes. Common values are 512 and 4096.
-	// Set to 0 to use the hypervisor default.
-	// NOTE: see BlockDeviceLogicalSectorSize for the reason the annotation key is abbreviated.
-	BlockDevicePhysicalSectorSize = kataAnnotHypervisorPrefix + "blk_physical_sector_size"
 
 	// RxRateLimiterMaxRate is a sandbox annotation that specifies max rate on network I/O inbound bandwidth.
 	RxRateLimiterMaxRate = kataAnnotHypervisorPrefix + "rx_rate_limiter_max_rate"
@@ -270,7 +245,7 @@ const (
 	EnableRootlessHypervisor = kataAnnotHypervisorPrefix + "rootless"
 
 	// Initdata is the initdata passed in when CreateVM
-	Initdata = kataConfAnnotationsPrefix + "hypervisor.cc_init_data"
+	Initdata = kataConfAnnotationsPrefix + "runtime.cc_init_data"
 )
 
 // Runtime related annotations

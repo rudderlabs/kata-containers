@@ -118,11 +118,13 @@ impl TryFrom<NamedHypervisorConfig> for VmConfig {
 
         // Note how CH handles the different image types:
         //
+        // - A standard image is specified in PmemConfig.
         // - An initrd/initramfs is specified in PayloadConfig.
-        // - An image is specified in DiskConfig.
-        //   Note: pmem is not used as it's not properly supported by Cloud Hypervisor.
+        // - A confidential guest image is specified by a DiskConfig.
         //   - If TDX is enabled, the firmware (`td-shim` [1]) must be
         //     specified in PayloadConfig.
+        // - A confidential guest initrd is specified by a PayloadConfig with
+        //   firmware.
         //
         // [1] - https://github.com/confidential-containers/td-shim
         let boot_info = cfg.boot_info;
@@ -138,6 +140,14 @@ impl TryFrom<NamedHypervisorConfig> for VmConfig {
             return Err(VmConfigError::NoBootFile);
         }
 
+        let pmem = if use_initrd || guest_protection_is_tdx(guest_protection_to_use.clone()) {
+            None
+        } else {
+            let pmem = PmemConfig::try_from(&boot_info).map_err(VmConfigError::PmemError)?;
+
+            Some(vec![pmem])
+        };
+
         let payload = Some(
             PayloadConfig::try_from((
                 boot_info.clone(),
@@ -149,7 +159,7 @@ impl TryFrom<NamedHypervisorConfig> for VmConfig {
 
         let mut disks: Vec<DiskConfig> = vec![];
 
-        if use_image {
+        if use_image && guest_protection_is_tdx(guest_protection_to_use.clone()) {
             let disk = DiskConfig::try_from(boot_info).map_err(VmConfigError::DiskError)?;
 
             disks.push(disk);
@@ -189,6 +199,7 @@ impl TryFrom<NamedHypervisorConfig> for VmConfig {
             fs,
             net,
             devices: host_devices,
+            pmem,
             disks,
             vsock: Some(vsock),
             rng,
@@ -308,12 +319,12 @@ impl TryFrom<(CpuInfo, GuestProtection)> for CpusConfig {
         let guest_protection_to_use = args.1;
 
         // This can only happen if runtime-rs fails to set default values.
-        if cpu.default_vcpus <= 0.0 {
+        if cpu.default_vcpus <= 0 {
             return Err(CpusConfigError::BootVCPUsTooSmall);
         }
 
-        let default_vcpus = u8::try_from(cpu.default_vcpus.ceil() as u32)
-            .map_err(CpusConfigError::BootVCPUsTooBig)?;
+        let default_vcpus =
+            u8::try_from(cpu.default_vcpus).map_err(CpusConfigError::BootVCPUsTooBig)?;
 
         // This can only happen if runtime-rs fails to set default values.
         if cpu.default_maxvcpus == 0 {
@@ -600,7 +611,7 @@ mod tests {
         };
 
         let cpu_info = CpuInfo {
-            default_vcpus: cpu_default as f32,
+            default_vcpus: cpu_default as i32,
             default_maxvcpus,
 
             ..Default::default()
@@ -1148,7 +1159,7 @@ mod tests {
             },
             TestData {
                 cpu_info: CpuInfo {
-                    default_vcpus: -1.0,
+                    default_vcpus: -1,
 
                     ..Default::default()
                 },
@@ -1157,7 +1168,7 @@ mod tests {
             },
             TestData {
                 cpu_info: CpuInfo {
-                    default_vcpus: 1.0,
+                    default_vcpus: 1,
                     default_maxvcpus: 0,
 
                     ..Default::default()
@@ -1167,7 +1178,7 @@ mod tests {
             },
             TestData {
                 cpu_info: CpuInfo {
-                    default_vcpus: 9.0,
+                    default_vcpus: 9,
                     default_maxvcpus: 7,
 
                     ..Default::default()
@@ -1177,7 +1188,7 @@ mod tests {
             },
             TestData {
                 cpu_info: CpuInfo {
-                    default_vcpus: 1.0,
+                    default_vcpus: 1,
                     default_maxvcpus: 1,
                     ..Default::default()
                 },
@@ -1197,7 +1208,7 @@ mod tests {
             },
             TestData {
                 cpu_info: CpuInfo {
-                    default_vcpus: 1.0,
+                    default_vcpus: 1,
                     default_maxvcpus: 3,
                     ..Default::default()
                 },
@@ -1217,7 +1228,7 @@ mod tests {
             },
             TestData {
                 cpu_info: CpuInfo {
-                    default_vcpus: 1.0,
+                    default_vcpus: 1,
                     default_maxvcpus: 13,
                     ..Default::default()
                 },
@@ -1645,6 +1656,7 @@ mod tests {
         let (memory_info_confidential_guest, mem_config_confidential_guest) =
             make_memory_objects(79, usable_max_mem_bytes, true);
 
+        let (_, pmem_config_with_image) = make_bootinfo_pmemconfig_objects(image);
         let (machine_info, rng_config) = make_machineinfo_rngconfig_objects(entropy_source);
 
         let payload_firmware = None;
@@ -1652,7 +1664,6 @@ mod tests {
         let (boot_info_with_initrd, payload_config_with_initrd) =
             make_bootinfo_payloadconfig_objects(kernel, initramfs, payload_firmware, None);
 
-        let (_, disk_config_with_image) = make_bootinfo_diskconfig_objects(image);
         let (_, disk_config_confidential_guest_image) = make_bootinfo_diskconfig_objects(image);
 
         let boot_info_tdx_image = BootInfo {
@@ -1751,7 +1762,7 @@ mod tests {
             vsock: Some(valid_vsock.clone()),
 
             // rootfs image specific
-            disks: Some(vec![disk_config_with_image]),
+            pmem: Some(vec![pmem_config_with_image]),
 
             payload: Some(PayloadConfig {
                 kernel: Some(PathBuf::from(kernel)),
@@ -1812,7 +1823,7 @@ mod tests {
 
             cfg: HypervisorConfig {
                 cpu_info: CpuInfo {
-                    default_vcpus: 0.0,
+                    default_vcpus: 0,
 
                     ..cpu_info.clone()
                 },
@@ -1928,7 +1939,7 @@ mod tests {
                     vsock_socket_path: "vsock_socket_path".into(),
                     cfg: HypervisorConfig {
                         cpu_info: CpuInfo {
-                            default_vcpus: 1.0,
+                            default_vcpus: 1,
                             default_maxvcpus: 1,
 
                             ..Default::default()
@@ -1952,7 +1963,7 @@ mod tests {
                             ..Default::default()
                         },
                         cpu_info: CpuInfo {
-                            default_vcpus: 1.0,
+                            default_vcpus: 1,
                             default_maxvcpus: 1,
 
                             ..Default::default()
@@ -2133,10 +2144,7 @@ mod tests {
 
     #[test]
     fn test_check_tdx_rootfs_settings() {
-        let sev_snp_details = SevSnpDetails {
-            cbitpos: 42,
-            phys_addr_reduction: 42,
-        };
+        let sev_snp_details = SevSnpDetails { cbitpos: 42 };
 
         #[derive(Debug)]
         struct TestData<'a> {

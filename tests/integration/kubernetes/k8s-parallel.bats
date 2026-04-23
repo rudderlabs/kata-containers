@@ -5,14 +5,13 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-load "${BATS_TEST_DIRNAME}/lib.sh"
 load "${BATS_TEST_DIRNAME}/../../common.bash"
 load "${BATS_TEST_DIRNAME}/lib.sh"
 load "${BATS_TEST_DIRNAME}/tests_common.sh"
 
 setup() {
-	setup_common || die "setup_common failed"
-
+	setup_common
+	get_pod_config_dir
 	job_name="jobtest"
 	names=( "test1" "test2" "test3" )
 
@@ -39,7 +38,7 @@ setup() {
 	kubectl get jobs -l jobgroup=${job_name}
 
 	# Check the pods
-	kubectl wait --for=condition=Ready --timeout=120s pod -l jobgroup=${job_name}
+	kubectl wait --for=condition=Ready --timeout=$timeout pod -l jobgroup=${job_name}
 
 	# Check output of the jobs
 	for i in $(kubectl get pods -l jobgroup=${job_name} -o name); do
@@ -55,7 +54,7 @@ teardown() {
 
 	delete_tmp_policy_settings_dir "${policy_settings_dir}"
 
-	teardown_common "${node}" "${node_start_time:-}"
+	teardown_common
 
 	# Delete jobs
 	kubectl delete jobs -l jobgroup=${job_name}

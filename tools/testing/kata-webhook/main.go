@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"regexp"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -45,11 +44,6 @@ func annotatePodMutator(_ context.Context, ar *kwhmodel.AdmissionReview, obj met
 		fmt.Println("blacklisted namespace: ", ar.Namespace)
 		return &kwhmutating.MutatorResult{}, nil
 	}
-	// Check if we are only mutating pods in specific namespaces using the regular expression.
-	if whPolicy.nsOnlyRegexp != nil && !whPolicy.nsOnlyRegexp.MatchString(ar.Namespace) {
-		fmt.Println("namespace doesn't match re-only-namespaces: ", ar.Namespace)
-		return &kwhmutating.MutatorResult{}, nil
-	}
 
 	// We cannot support --net=host in Kata
 	// https://github.com/kata-containers/documentation/blob/master/Limitations.md#docker---nethost
@@ -61,6 +55,15 @@ func annotatePodMutator(_ context.Context, ar *kwhmodel.AdmissionReview, obj met
 	if pod.GetNamespace() == "sonobuoy" {
 		fmt.Println("sonobuoy pods will not be changed to kata", pod.GetNamespace(), pod.GetName())
 		return &kwhmutating.MutatorResult{}, nil
+	}
+
+	for i := range pod.Spec.Containers {
+		if pod.Spec.Containers[i].SecurityContext != nil && pod.Spec.Containers[i].SecurityContext.Privileged != nil {
+			if *pod.Spec.Containers[i].SecurityContext.Privileged {
+				fmt.Println("privileged container: ", pod.GetNamespace(), pod.GetName())
+				return &kwhmutating.MutatorResult{}, nil
+			}
+		}
 	}
 
 	if pod.Spec.RuntimeClassName != nil {
@@ -81,15 +84,13 @@ func annotatePodMutator(_ context.Context, ar *kwhmodel.AdmissionReview, obj met
 }
 
 type config struct {
-	certFile     string
-	keyFile      string
-	nsBlacklist  string
-	nsOnlyRegexp string
+	certFile    string
+	keyFile     string
+	nsBlacklist string
 }
 
 type policy struct {
-	nsBlacklist  map[string]bool
-	nsOnlyRegexp *regexp.Regexp
+	nsBlacklist map[string]bool
 }
 
 var whPolicy *policy
@@ -101,7 +102,6 @@ func initFlags() *config {
 	fl.StringVar(&cfg.certFile, "tls-cert-file", "", "TLS certificate file")
 	fl.StringVar(&cfg.keyFile, "tls-key-file", "", "TLS key file")
 	fl.StringVar(&cfg.nsBlacklist, "exclude-namespaces", "", "Comma separated namespace blacklist")
-	fl.StringVar(&cfg.nsOnlyRegexp, "only-namespaces-regexp", "", "Regexp namespace filter applied after --exclude-namespaces")
 
 	fl.Parse(os.Args[1:])
 	return cfg
@@ -119,15 +119,6 @@ func main() {
 	if cfg.nsBlacklist != "" {
 		for _, s := range strings.Split(cfg.nsBlacklist, ",") {
 			whPolicy.nsBlacklist[s] = true
-		}
-	}
-
-	if cfg.nsOnlyRegexp != "" {
-		var err error
-		whPolicy.nsOnlyRegexp, err = regexp.Compile(cfg.nsOnlyRegexp)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error compiling regular expression: %s", err)
-			os.Exit(1)
 		}
 	}
 

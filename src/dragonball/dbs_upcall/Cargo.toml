@@ -11,6 +11,7 @@ keywords = ["dragonball", "secure-sandbox", "devices", "upcall", "virtio"]
 readme = "README.md"
 
 [dependencies]
+anyhow = "1"
 log = "0.4.14"
 thiserror = "1"
 timerfd = "1.2.0"

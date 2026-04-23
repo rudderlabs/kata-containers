@@ -1,9 +1,9 @@
 [
   {
-    "allowed": true,
     "description": "image with unusual group setup, see https://github.com/burgerdev/weird-images/tree/74b32e2/src/gid",
-    "kind": "CreateContainerRequest",
+    "allowed": true,
     "request": {
+      "type": "CreateContainer",
       "OCI": {
         "Annotations": {
           "io.katacontainers.pkg.oci.bundle_path": "/run/containerd/io.containerd.runtime.v2.task/k8s.io/gid",
@@ -293,15 +293,15 @@
           "Terminal": false,
           "User": {
             "AdditionalGids": [
-              0
+              1
             ],
-            "GID": 0,
-            "UID": 0,
+            "GID": 1,
+            "UID": 2,
             "Username": ""
           }
         },
         "Root": {
-          "Path": "/run/kata-containers/gid/rootfs",
+          "Path": "/run/kata-containers/shared/containers/gid/rootfs",
           "Readonly": false
         },
         "Solaris": null,
@@ -333,10 +333,10 @@
     }
   },
   {
-    "allowed": false,
     "description": "image with unusual group setup, but bad additional group",
-    "kind": "CreateContainerRequest",
+    "allowed": false,
     "request": {
+      "type": "CreateContainer",
       "OCI": {
         "Annotations": {
           "io.katacontainers.pkg.oci.bundle_path": "/run/containerd/io.containerd.runtime.v2.task/k8s.io/gid",
@@ -626,10 +626,11 @@
           "Terminal": false,
           "User": {
             "AdditionalGids": [
-              0
+              1, 
+              123
             ],
-            "GID": 0,
-            "UID": 0,
+            "GID": 1,
+            "UID": 2,
             "Username": ""
           }
         },

@@ -5,8 +5,7 @@
 
 use anyhow::Result;
 use opentelemetry::sdk::propagation::TraceContextPropagator;
-use opentelemetry::trace::TracerProvider;
-use opentelemetry::{global, sdk::trace::Config};
+use opentelemetry::{global, sdk::trace::Config, trace::TracerProvider};
 use slog::{info, o, Logger};
 use std::collections::HashMap;
 use tracing_opentelemetry::OpenTelemetryLayer;
@@ -24,12 +23,15 @@ pub fn setup_tracing(name: &'static str, logger: &Logger) -> Result<()> {
     let config = Config::default();
 
     let builder = opentelemetry::sdk::trace::TracerProvider::builder()
-        .with_batch_exporter(exporter, opentelemetry::runtime::Tokio)
+        .with_batch_exporter(exporter, opentelemetry::runtime::TokioCurrentThread)
         .with_config(config);
 
     let provider = builder.build();
 
-    let tracer = provider.tracer(name);
+    // We don't need a versioned tracer.
+    let version = None;
+
+    let tracer = provider.get_tracer(name, version);
 
     let _global_provider = global::set_tracer_provider(provider);
 

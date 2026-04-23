@@ -70,7 +70,10 @@ impl SerialEvents for SerialEventsWrapper {
             .map_or(Ok(()), |buf_ready| buf_ready.write(1))
         {
             Ok(_) => (),
-            Err(err) => error!("Could not signal that serial device buffer is ready: {err:?}"),
+            Err(err) => error!(
+                "Could not signal that serial device buffer is ready: {:?}",
+                err
+            ),
         }
     }
 }
@@ -108,7 +111,7 @@ impl ConsoleHandler for SerialWrapper<EventFdTrigger, SerialEventsWrapper> {
     fn raw_input(&mut self, data: &[u8]) -> std::io::Result<usize> {
         self.serial
             .enqueue_raw_bytes(data)
-            .map_err(|e| std::io::Error::other(format!("{e:?}")))
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{e:?}")))
     }
 
     fn set_output_stream(&mut self, out: Option<Box<dyn Write + Send>>) {
@@ -130,7 +133,7 @@ impl DeviceIoMut for SerialWrapper<EventFdTrigger, SerialEventsWrapper> {
             return;
         }
         if let Err(e) = self.serial.write(offset.raw_value() as u8, data[0]) {
-            error!("Failed the pio write to serial: {e:?}");
+            error!("Failed the pio write to serial: {:?}", e);
             self.serial.events().metrics.error_count.inc();
         }
     }
@@ -148,7 +151,7 @@ impl DeviceIoMut for SerialWrapper<EventFdTrigger, SerialEventsWrapper> {
             return;
         }
         if let Err(e) = self.serial.write(offset.raw_value() as u8, data[0]) {
-            error!("Failed the write to serial: {e:?}");
+            error!("Failed the write to serial: {:?}", e);
             self.serial.events().metrics.error_count.inc();
         }
     }
@@ -242,7 +245,7 @@ mod tests {
 
         let metrics = Arc::new(SerialDeviceMetrics::default());
 
-        let out: Arc<Mutex<Option<Box<dyn std::io::Write + Send + 'static>>>> =
+        let out: Arc<Mutex<Option<Box<(dyn std::io::Write + Send + 'static)>>>> =
             Arc::new(Mutex::new(Some(Box::new(std::io::sink()))));
         let mut serial = SerialDevice {
             serial: Serial::with_events(

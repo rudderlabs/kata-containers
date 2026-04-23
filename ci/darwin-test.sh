@@ -8,7 +8,6 @@ set -e
 
 cidir=$(dirname "$0")
 runtimedir=${cidir}/../src/runtime
-genpolicydir=${cidir}/../src/tools/genpolicy
 
 build_working_packages() {
 	# working packages:
@@ -41,11 +40,3 @@ build_working_packages() {
 }
 
 build_working_packages
-
-build_genpolicy() {
-	echo "building genpolicy"
-	pushd "${genpolicydir}" &>/dev/null
-	make TRIPLE=aarch64-apple-darwin build
-}
-
-build_genpolicy

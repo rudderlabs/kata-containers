@@ -22,8 +22,6 @@ use protocols::{
 };
 use safe_path::scoped_join;
 use std::fs;
-use std::fs::File;
-use std::io::{self, Read};
 use std::path::Path;
 use std::{os::unix::fs::symlink, path::PathBuf};
 use tokio::sync::OnceCell;
@@ -110,7 +108,7 @@ impl CDHClient {
 
     pub async fn get_resource(&self, resource_path: &str) -> Result<Vec<u8>> {
         let req = GetResourceRequest {
-            ResourcePath: format!("kbs://{resource_path}"),
+            ResourcePath: format!("kbs://{}", resource_path),
             ..Default::default()
         };
         let res = self
@@ -237,8 +235,8 @@ pub async fn unseal_file(path: &str) -> Result<()> {
         }
 
         let secret_name = entry.file_name();
-        if content_starts_with_prefix(&target_path, SEALED_SECRET_PREFIX).await? {
-            let contents = fs::read_to_string(&target_path)?;
+        let contents = fs::read_to_string(&target_path)?;
+        if contents.starts_with(SEALED_SECRET_PREFIX) {
             // Get the directory name of the sealed secret file
             let dir_name = target_path
                 .parent()
@@ -262,17 +260,6 @@ pub async fn unseal_file(path: &str) -> Result<()> {
         }
     }
     Ok(())
-}
-
-pub async fn content_starts_with_prefix(path: &Path, prefix: &str) -> io::Result<bool> {
-    let mut file = File::open(path)?;
-    let mut buffer = vec![0u8; prefix.len()];
-
-    match file.read_exact(&mut buffer) {
-        Ok(()) => Ok(buffer == prefix.as_bytes()),
-        Err(ref e) if e.kind() == io::ErrorKind::UnexpectedEof => Ok(false),
-        Err(e) => Err(e),
-    }
 }
 
 pub async fn secure_mount(
@@ -307,7 +294,7 @@ mod tests {
     use std::fs::File;
     use std::io::{Read, Write};
     use std::sync::Arc;
-    use tempfile::{tempdir, NamedTempFile};
+    use tempfile::tempdir;
     use test_utils::skip_if_not_root;
     use tokio::signal::unix::{signal, SignalKind};
     struct TestService;
@@ -428,35 +415,5 @@ mod tests {
 
         rt.shutdown_background();
         std::thread::sleep(std::time::Duration::from_secs(2));
-    }
-
-    #[tokio::test]
-    async fn test_content_starts_with_prefix() {
-        // Normal case: content matches the prefix
-        let mut f = NamedTempFile::new().unwrap();
-        write!(f, "sealed.hello_world").unwrap();
-        assert!(content_starts_with_prefix(f.path(), "sealed.")
-            .await
-            .unwrap());
-
-        // Does not match the prefix
-        let mut f2 = NamedTempFile::new().unwrap();
-        write!(f2, "notsealed.hello_world").unwrap();
-        assert!(!content_starts_with_prefix(f2.path(), "sealed.")
-            .await
-            .unwrap());
-
-        // File length < prefix.len()
-        let mut f3 = NamedTempFile::new().unwrap();
-        write!(f3, "seal").unwrap();
-        assert!(!content_starts_with_prefix(f3.path(), "sealed.")
-            .await
-            .unwrap());
-
-        // Empty file
-        let f4 = NamedTempFile::new().unwrap();
-        assert!(!content_starts_with_prefix(f4.path(), "sealed.")
-            .await
-            .unwrap());
     }
 }

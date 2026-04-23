@@ -20,9 +20,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const (
-	procMountInfoFile = "/proc/self/mountinfo"
-)
+const procMountInfoFile = "/proc/self/mountinfo"
 
 // EnterNetNS is free from any call to a go routine, and it calls
 // into runtime.LockOSThread(), meaning it won't be executed in a
@@ -31,30 +29,27 @@ func EnterNetNS(networkID string, cb func() error) error {
 	return vc.EnterNetNS(networkID, cb)
 }
 
-// SetupNetworkNamespace creates a network namespace if one is not already
-// provided via NetworkID. When NetworkID is empty and networking is not
-// disabled, a new namespace is created as a placeholder; the actual
-// hypervisor namespace will be discovered later by addAllEndpoints after
-// the VM has started.
+// SetupNetworkNamespace create a network namespace
 func SetupNetworkNamespace(config *vc.NetworkConfig) error {
 	if config.DisableNewNetwork {
 		kataUtilsLogger.Info("DisableNewNetNs is on, shim and hypervisor are running in the host netns")
 		return nil
 	}
 
-	if config.NetworkID == "" {
-		var (
-			err error
-			n   ns.NetNS
-		)
+	var err error
+	var n ns.NetNS
 
+	if config.NetworkID == "" {
 		if rootless.IsRootless() {
 			n, err = rootless.NewNS()
+			if err != nil {
+				return err
+			}
 		} else {
 			n, err = testutils.NewNS()
-		}
-		if err != nil {
-			return err
+			if err != nil {
+				return err
+			}
 		}
 
 		config.NetworkID = n.Path()
@@ -76,22 +71,10 @@ func SetupNetworkNamespace(config *vc.NetworkConfig) error {
 }
 
 const (
-	netNsMountType = "nsfs"
-	mountDestIdx   = 4
+	netNsMountType    = "nsfs"
+	mountTypeFieldIdx = 8
+	mountDestIdx      = 4
 )
-
-// mountinfoFsType finds the filesystem type in a parsed mountinfo line.
-// The mountinfo format has optional tagged fields (shared:, master:, etc.)
-// between field 7 and a "-" separator. The fs type is the field immediately
-// after "-". Returns "" if the separator is not found.
-func mountinfoFsType(fields []string) string {
-	for i, f := range fields {
-		if f == "-" && i+1 < len(fields) {
-			return fields[i+1]
-		}
-	}
-	return ""
-}
 
 // getNetNsFromBindMount returns the network namespace for the bind-mounted path
 func getNetNsFromBindMount(nsPath string, procMountFile string) (string, error) {
@@ -117,15 +100,16 @@ func getNetNsFromBindMount(nsPath string, procMountFile string) (string, error) 
 		// "711 26 0:3 net:[4026532009] /run/docker/netns/default rw shared:535 - nsfs nsfs rw"
 		//
 		// Reference: https://www.kernel.org/doc/Documentation/filesystems/proc.txt
-		// The "-" separator has a variable position due to optional tagged
-		// fields, so we locate the fs type dynamically.
+
+		// We are interested in the first 9 fields of this file,
+		// to check for the correct mount type.
 		fields := strings.Split(text, " ")
 		if len(fields) < 9 {
 			continue
 		}
 
 		// We check here if the mount type is a network namespace mount type, namely "nsfs"
-		if mountinfoFsType(fields) != netNsMountType {
+		if fields[mountTypeFieldIdx] != netNsMountType {
 			continue
 		}
 

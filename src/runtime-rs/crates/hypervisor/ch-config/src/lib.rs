@@ -9,10 +9,11 @@ use std::path::PathBuf;
 pub mod ch_api;
 pub mod convert;
 pub mod net_util;
+mod virtio_devices;
 
+use crate::virtio_devices::RateLimiterConfig;
 use kata_sys_util::protection::GuestProtection;
 use kata_types::config::hypervisor::Hypervisor as HypervisorConfig;
-use kata_types::config::hypervisor::RateLimiterConfig;
 pub use net_util::MacAddr;
 
 pub const MAX_NUM_PCI_SEGMENTS: u16 = 16;
@@ -110,16 +111,6 @@ pub struct DeviceConfig {
     pub pci_segment: u16,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum ImageType {
-    FixedVhd,
-    Qcow2,
-    Raw,
-    Vhdx,
-    #[default]
-    Unknown,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, Default)]
 pub struct DiskConfig {
     pub path: Option<PathBuf>,
@@ -145,8 +136,6 @@ pub struct DiskConfig {
     pub disable_io_uring: bool,
     #[serde(default)]
     pub pci_segment: u16,
-    #[serde(default)]
-    pub image_type: ImageType,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, Default)]
@@ -550,10 +539,7 @@ mod tests {
 
     #[test]
     fn test_guest_protection_is_tdx() {
-        let sev_snp_details = SevSnpDetails {
-            cbitpos: 42,
-            phys_addr_reduction: 42,
-        };
+        let sev_snp_details = SevSnpDetails { cbitpos: 42 };
 
         #[derive(Debug)]
         struct TestData {

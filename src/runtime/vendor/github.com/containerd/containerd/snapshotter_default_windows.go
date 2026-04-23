@@ -21,6 +21,4 @@ const (
 	// This will be based on the client compilation target, so take that into
 	// account when choosing this value.
 	DefaultSnapshotter = "windows"
-	// DefaultDiffer will set the default differ for the platform.
-	DefaultDiffer = "walking"
 )

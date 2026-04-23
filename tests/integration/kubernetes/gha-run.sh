@@ -33,10 +33,9 @@ export ITA_KEY="${ITA_KEY:-}"
 export HTTPS_PROXY="${HTTPS_PROXY:-${https_proxy:-}}"
 export NO_PROXY="${NO_PROXY:-${no_proxy:-}}"
 export PULL_TYPE="${PULL_TYPE:-default}"
+export AUTO_GENERATE_POLICY="${AUTO_GENERATE_POLICY:-no}"
 export TEST_CLUSTER_NAMESPACE="${TEST_CLUSTER_NAMESPACE:-kata-containers-k8s-tests}"
 export GENPOLICY_PULL_METHOD="${GENPOLICY_PULL_METHOD:-oci-distribution}"
-export TARGET_ARCH="${TARGET_ARCH:-x86_64}"
-export RUNS_ON_AKS="${RUNS_ON_AKS:-false}"
 
 function configure_devmapper() {
 	sudo mkdir -p /var/lib/containerd/devmapper
@@ -86,41 +85,30 @@ EOF
 		*) >&2 echo "${KUBERNETES} flavour is not supported"; exit 2 ;;
 	esac
 
-	# We need to use tomlq to update the containerd config with the devmapper configuration,
-	# as it's a more complex update that involves adding new entries and modifying existing ones
-	# for two different containerd versions.
-	install_tomlq
-
-	containerd_arch="$(uname -m)"
-	case "${containerd_arch}" in
-		x86_64) containerd_arch="amd64" ;;
-		aarch64|arm64) containerd_arch="arm64" ;;
-	esac
-
-	echo "Updating containerd config with tomlq..."
-	config_tmp_file="$(sudo mktemp)"
-	sudo cat "${containerd_config_file}" | tomlq -t --arg platform "linux/${containerd_arch}" '
-		.plugins["io.containerd.snapshotter.v1.devmapper"].pool_name = "contd-thin-pool"
-		| .plugins["io.containerd.snapshotter.v1.devmapper"].base_image_size = "4096MB"
-		| .plugins["io.containerd.transfer.v1.local"].unpack_config =
-			[((.plugins["io.containerd.transfer.v1.local"].unpack_config[0] // {}) + {platform: $platform, snapshotter: "devmapper"})]
-		| if .version == 3 then
-			.plugins["io.containerd.cri.v1.images"].snapshotter = "devmapper"
-		  else
-			.plugins["io.containerd.grpc.v1.cri"].containerd.snapshotter = "devmapper"
-		  end
-	' | sudo tee "${config_tmp_file}" > /dev/null
-	sudo mv "${config_tmp_file}" "${containerd_config_file}"
-
-	# We only need tomlq for this configuration.
-	# yq, installed by install_tomlq, might cause an issue with go-based yq used by CI.
-	# So we uninstall tomlq to remove the yq from PATH and avoid any potential conflict.
-	uninstall_tomlq
+	# We're not using this with baremetal machines, so we're fine on cutting
+	# corners here and just append this to the configuration file.
+	# Check if the "devmapper" plugin section exists in the file
+	if grep -q 'plugins."io.containerd.snapshotter.v1.devmapper"' "${containerd_config_file}"; then
+	    echo "devmapper section found. Updating pool_name and base_image_size..."
+	    sudo sed -i '/\[plugins."io.containerd.snapshotter.v1.devmapper"\]/,/\[plugins\./ {
+	        s/pool_name = ".*"/pool_name = "contd-thin-pool"/
+	        s/base_image_size = ".*"/base_image_size = "4096MB"/
+	    }' "${containerd_config_file}"
+	else
+	    echo "devmapper section not found. Appending to the config file..."
+		cat<<EOF | sudo tee -a "${containerd_config_file}"
+[plugins."io.containerd.snapshotter.v1.devmapper"]
+  pool_name = "contd-thin-pool"
+  base_image_size = "4096MB"
+EOF
+	fi
 
 	case "${KUBERNETES}" in
 		k3s)
+			sudo sed -i -e 's/snapshotter = "overlayfs"/snapshotter = "devmapper"/g' "${containerd_config_file}"
 			sudo systemctl restart k3s ;;
 		kubeadm)
+			sudo sed -i -e 's/snapshotter = "overlayfs"/snapshotter = "devmapper"/g' "${containerd_config_file}"
 			sudo systemctl restart containerd ;;
 		*) >&2 echo "${KUBERNETES} flavour is not supported"; exit 2 ;;
 	esac
@@ -185,20 +173,9 @@ function deploy_kata() {
 
 	set_default_cluster_namespace
 
-	# Workaround to avoid modifying the workflow yaml files
-	case "${KATA_HYPERVISOR}" in
-		qemu-tdx|qemu-snp|qemu-nvidia-gpu-*)
-			USE_EXPERIMENTAL_SETUP_SNAPSHOTTER=true
-			SNAPSHOTTER="nydus"
-			EXPERIMENTAL_FORCE_GUEST_PULL=false
-			;;
-		*)
-			;;
-	esac
-
 	ANNOTATIONS="default_vcpus"
 	if [[ "${KATA_HOST_OS}" = "cbl-mariner" ]]; then
-		ANNOTATIONS="image kernel default_vcpus cc_init_data"
+		ANNOTATIONS="image kernel default_vcpus disable_image_nvdimm"
 	fi
 	if [[ "${KATA_HYPERVISOR}" = "qemu" ]]; then
 		ANNOTATIONS="image initrd kernel default_vcpus"
@@ -219,17 +196,6 @@ function deploy_kata() {
 		HOST_OS="${KATA_HOST_OS}"
 	fi
 
-	# nydus and erofs are always deployed by kata-deploy; set this unconditionally
-	# based on the snapshotter so that all architectures and hypervisors work
-	# without needing per-workflow USE_EXPERIMENTAL_SETUP_SNAPSHOTTER overrides.
-	EXPERIMENTAL_SETUP_SNAPSHOTTER=""
-	case "${SNAPSHOTTER}" in
-		nydus|erofs) EXPERIMENTAL_SETUP_SNAPSHOTTER="${SNAPSHOTTER}" ;;
-		*) ;;
-	esac
-
-	EXPERIMENTAL_FORCE_GUEST_PULL="${EXPERIMENTAL_FORCE_GUEST_PULL:-}"
-
 	export HELM_K8S_DISTRIBUTION="${KUBERNETES}"
 	export HELM_IMAGE_REFERENCE="${DOCKER_REGISTRY}/${DOCKER_REPO}"
 	export HELM_IMAGE_TAG="${DOCKER_TAG}"
@@ -242,8 +208,6 @@ function deploy_kata() {
 	export HELM_AGENT_HTTPS_PROXY="${HTTPS_PROXY}"
 	export HELM_AGENT_NO_PROXY="${NO_PROXY}"
 	export HELM_PULL_TYPE_MAPPING="${PULL_TYPE_MAPPING}"
-	export HELM_EXPERIMENTAL_SETUP_SNAPSHOTTER="${EXPERIMENTAL_SETUP_SNAPSHOTTER}"
-	export HELM_EXPERIMENTAL_FORCE_GUEST_PULL="${EXPERIMENTAL_FORCE_GUEST_PULL}"
 	export HELM_HOST_OS="${HOST_OS}"
 	helm_helper
 }
@@ -325,7 +289,7 @@ function run_tests() {
 	if [[ "${KATA_HYPERVISOR}" = "dragonball" ]] && [[ "${SNAPSHOTTER}" = "devmapper" ]]; then
 		echo "Skipping tests for ${KATA_HYPERVISOR} using devmapper"
 	else
-		bash "${K8STESTS}"
+		bash run_kubernetes_tests.sh
 	fi
 	popd
 }
@@ -336,7 +300,41 @@ function run_tests() {
 # directory.
 #
 function report_tests() {
-	report_bats_tests "${kubernetes_dir}"
+	local reports_dir="${kubernetes_dir}/reports"
+	local ok
+	local not_ok
+	local status
+
+	if [[ ! -d "${reports_dir}" ]]; then
+		info "no reports directory found: ${reports_dir}"
+		return
+	fi
+
+	for report_dir in "${reports_dir}"/*; do
+		mapfile -t ok < <(find "${report_dir}" -name "ok-*.out")
+		mapfile -t not_ok < <(find "${report_dir}" -name "not_ok-*.out")
+
+		cat <<-EOF
+		SUMMARY ($(basename "${report_dir}")):
+		 Pass:  ${#ok[*]}
+		 Fail:  ${#not_ok[*]}
+		EOF
+
+		echo -e "\nSTATUSES:"
+		for out in "${not_ok[@]}" "${ok[@]}"; do
+			status=$(basename "${out}" | cut -d '-' -f1)
+			bats=$(basename "${out}" | cut -d '-' -f2- | sed 's/.out$//')
+			echo " ${status} ${bats}"
+		done
+
+		echo -e "\nOUTPUTS:"
+		for out in "${not_ok[@]}" "${ok[@]}"; do
+			bats=$(basename "${out}" | cut -d '-' -f2- | sed 's/.out$//')
+			echo "::group::${bats}"
+			cat "${out}"
+			echo "::endgroup::"
+		done
+	done
 }
 
 function collect_artifacts() {
@@ -415,9 +413,7 @@ function cleanup_kata_deploy() {
 
 	# Do not return after deleting only the parent object cascade=foreground
 	# means also wait for child/dependent object deletion
-	helm uninstall kata-deploy --ignore-not-found --wait --cascade foreground --timeout 10m --namespace kube-system --debug || true
-
-	wait_for_api_and_retry_uninstall "kata-deploy" "kube-system"
+	helm uninstall kata-deploy --ignore-not-found --wait --cascade foreground --timeout 10m --namespace kube-system --debug
 }
 
 function cleanup() {
@@ -475,71 +471,137 @@ function cleanup_snapshotter() {
 }
 
 function deploy_nydus_snapshotter() {
-	echo "nydus-for-kata-tee is now deployed and managed by kata-deploy; nothing to do here."
+	echo "::group::deploy_nydus_snapshotter"
+	ensure_yq
+
+	local nydus_snapshotter_install_dir
+	nydus_snapshotter_install_dir="/tmp/nydus-snapshotter"
+	if [[ -d "${nydus_snapshotter_install_dir}" ]]; then
+		rm -rf "${nydus_snapshotter_install_dir}"
+	fi
+	mkdir -p "${nydus_snapshotter_install_dir}"
+	nydus_snapshotter_url=$(get_from_kata_deps ".externals.nydus-snapshotter.url")
+	nydus_snapshotter_version=$(get_from_kata_deps ".externals.nydus-snapshotter.version")
+	git clone -b "${nydus_snapshotter_version}" "${nydus_snapshotter_url}" "${nydus_snapshotter_install_dir}"
+
+	pushd "${nydus_snapshotter_install_dir}"
+	if [[ "${K8S_TEST_HOST_TYPE}" = "baremetal" ]]; then
+		cleanup_nydus_snapshotter || true
+	fi
+	if [[ "${PULL_TYPE}" == "guest-pull" ]]; then
+		# Enable guest pull feature in nydus snapshotter
+		yq -i \
+      'select(.kind == "ConfigMap").data.FS_DRIVER = "proxy"' \
+      misc/snapshotter/base/nydus-snapshotter.yaml
+	else
+		>&2 echo "Invalid pull type"; exit 2
+	fi
+
+	# Disable to read snapshotter config from configmap
+	yq -i \
+    'select(.kind == "ConfigMap").data.ENABLE_CONFIG_FROM_VOLUME = "false"' \
+	  misc/snapshotter/base/nydus-snapshotter.yaml
+	# Enable to run snapshotter as a systemd service
+	yq -i \
+    'select(.kind == "ConfigMap").data.ENABLE_SYSTEMD_SERVICE = "true"' \
+	  misc/snapshotter/base/nydus-snapshotter.yaml
+	# Enable "runtime specific snapshotter" feature in containerd when configuring containerd for snapshotter
+	yq -i \
+    'select(.kind == "ConfigMap").data.ENABLE_RUNTIME_SPECIFIC_SNAPSHOTTER = "true"' \
+	  misc/snapshotter/base/nydus-snapshotter.yaml
+
+	# Pin the version of nydus-snapshotter image.
+	# TODO: replace with a definitive solution (see https://github.com/kata-containers/kata-containers/issues/9742)
+	yq -i \
+		"select(.kind == \"DaemonSet\").spec.template.spec.containers[0].image = \"ghcr.io/containerd/nydus-snapshotter:${nydus_snapshotter_version}\"" \
+		misc/snapshotter/base/nydus-snapshotter.yaml
+
+	# Deploy nydus snapshotter as a daemonset
+	kubectl_retry create -f "misc/snapshotter/nydus-snapshotter-rbac.yaml"
+	if [[ "${KUBERNETES}" = "k3s" ]]; then
+		kubectl_retry apply -k "misc/snapshotter/overlays/k3s"
+	else
+		kubectl_retry apply -f "misc/snapshotter/base/nydus-snapshotter.yaml"
+	fi
+	popd
+
+	kubectl rollout status daemonset nydus-snapshotter -n nydus-system --timeout "${SNAPSHOTTER_DEPLOY_WAIT_TIMEOUT}"
+
+	echo "::endgroup::"
+	echo "::group::nydus snapshotter logs"
+	kubectl_retry logs --selector=app=nydus-snapshotter -n nydus-system
+	echo "::endgroup::"
+	echo "::group::nydus snapshotter describe"
+	kubectl_retry describe pod --selector=app=nydus-snapshotter -n nydus-system
+	echo "::endgroup::"
 }
 
 function cleanup_nydus_snapshotter() {
-	echo "nydus-for-kata-tee is now deployed and managed by kata-deploy; nothing to do here."
+	echo "cleanup_nydus_snapshotter"
+	local nydus_snapshotter_install_dir
+	nydus_snapshotter_install_dir="/tmp/nydus-snapshotter"
+	if [[ ! -d "${nydus_snapshotter_install_dir}" ]]; then
+		>&2 echo "nydus snapshotter dir not found"
+		exit 1
+	fi
+
+	pushd "${nydus_snapshotter_install_dir}"
+
+	if [[ "${KUBERNETES}" = "k3s" ]]; then
+		kubectl_retry delete --ignore-not-found -k "misc/snapshotter/overlays/k3s"
+	else
+		kubectl_retry delete --ignore-not-found -f "misc/snapshotter/base/nydus-snapshotter.yaml"
+	fi
+	sleep 180s
+	kubectl_retry delete --ignore-not-found -f "misc/snapshotter/nydus-snapshotter-rbac.yaml"
+	popd
+	sleep 30s
+	echo "::endgroup::"
 }
 
 function main() {
 	export KATA_HOST_OS="${KATA_HOST_OS:-}"
 	export K8S_TEST_HOST_TYPE="${K8S_TEST_HOST_TYPE:-}"
 
-	AUTO_GENERATE_POLICY="${AUTO_GENERATE_POLICY:-}"
-
-	# Auto-generate policy on some Host types, if the caller didn't specify an AUTO_GENERATE_POLICY value.
-	if [[ -z "${AUTO_GENERATE_POLICY}" ]]; then
-		if [[ "${KATA_HOST_OS}" = "cbl-mariner" ]]; then
-			AUTO_GENERATE_POLICY="yes"
-		elif [[ "${KATA_HYPERVISOR}" = qemu-coco-dev* && \
-		        "${TARGET_ARCH}" = "x86_64" && \
-		        "${PULL_TYPE}" != "experimental-force-guest-pull" ]]; then
-			AUTO_GENERATE_POLICY="yes"
-		elif [[ "${KATA_HYPERVISOR}" = qemu-nvidia-gpu-* ]]; then
-			AUTO_GENERATE_POLICY="yes"
-		fi
-	fi
-
-	info "Exporting AUTO_GENERATE_POLICY=${AUTO_GENERATE_POLICY}"
-	export AUTO_GENERATE_POLICY
-
 	action="${1:-}"
 
 	case "${action}" in
+		install-azure-cli) install_azure_cli ;;
 		create-cluster) create_cluster "" ;;
 		create-cluster-kcli) create_cluster_kcli ;;
 		configure-snapshotter) configure_snapshotter ;;
+		setup-crio) setup_crio ;;
 		deploy-coco-kbs) deploy_coco_kbs ;;
-		deploy-k8s) deploy_k8s ${CONTAINER_ENGINE:-} ${CONTAINER_ENGINE_VERSION:-};;
+		deploy-k8s) deploy_k8s ;;
 		install-bats) install_bats ;;
-		install-kata-tools) install_kata_tools "${2:-}" ;;
+		install-kata-tools) install_kata_tools ;;
 		install-kbs-client) install_kbs_client ;;
-		get-cluster-credentials) get_cluster_credentials ;;
+		get-cluster-credentials) get_cluster_credentials "" ;;
+		deploy-csi-driver) return 0 ;;
 		deploy-kata) deploy_kata ;;
 		deploy-kata-aks) deploy_kata "aks" ;;
 		deploy-kata-kcli) deploy_kata "kcli" ;;
 		deploy-kata-kubeadm) deploy_kata "kubeadm" ;;
+		deploy-kata-sev) deploy_kata "sev" ;;
+		deploy-kata-snp) deploy_kata "snp" ;;
+		deploy-kata-tdx) deploy_kata "tdx" ;;
 		deploy-kata-garm) deploy_kata "garm" ;;
 		deploy-kata-zvsi) deploy_kata "zvsi" ;;
 		deploy-snapshotter) deploy_snapshotter ;;
 		report-tests) report_tests ;;
-		run-tests)
-			K8STESTS=run_kubernetes_tests.sh
-			run_tests
-			;;
-		run-nv-tests)
-			K8STESTS=run_kubernetes_nv_tests.sh
-			run_tests
-			;;
+		run-tests) run_tests ;;
 		run-tests-kcli) run_tests "kcli" ;;
 		collect-artifacts) collect_artifacts ;;
 		cleanup) cleanup ;;
 		cleanup-kcli) cleanup "kcli" ;;
 		cleanup-kubeadm) cleanup "kubeadm" ;;
+		cleanup-sev) cleanup "sev" ;;
+		cleanup-snp) cleanup "snp" ;;
+		cleanup-tdx) cleanup "tdx" ;;
 		cleanup-garm) cleanup "garm" ;;
 		cleanup-zvsi) cleanup "zvsi" ;;
 		cleanup-snapshotter) cleanup_snapshotter ;;
+		delete-csi-driver) return 0 ;;
 		delete-coco-kbs) delete_coco_kbs ;;
 		delete-cluster) cleanup "aks" ;;
 		delete-cluster-kcli) delete_cluster_kcli ;;

@@ -11,6 +11,7 @@
 
 use kata_types::mount;
 use oci_spec::runtime::{Mount, Spec};
+use std::path::Path;
 
 use crate::mount::get_linux_mount_info;
 
@@ -33,8 +34,10 @@ pub fn is_ephemeral_volume(mount: &Mount) -> bool {
             mount.destination(),
 
         ),
-        (Some("bind"), Some(source), _dest) if get_linux_mount_info(source).is_ok_and(|info| info.fs_type == "tmpfs") &&
-            is_empty_dir(source))
+        (Some("bind"), Some(source), dest) if get_linux_mount_info(source)
+            .map_or(false, |info| info.fs_type == "tmpfs") &&
+            (is_empty_dir(source) || dest.as_path() == Path::new("/dev/shm"))
+    )
 }
 
 /// Check whether the given path is a kubernetes empty-dir volume of medium "default".
@@ -42,15 +45,15 @@ pub fn is_ephemeral_volume(mount: &Mount) -> bool {
 /// K8s `EmptyDir` volumes are directories on the host. If the fs type is tmpfs, it's a ephemeral
 /// volume instead of a `EmptyDir` volume.
 pub fn is_host_empty_dir(path: &str) -> bool {
-    if !is_empty_dir(path) {
-        return false;
+    if is_empty_dir(path) {
+        if let Ok(info) = get_linux_mount_info(path) {
+            if info.fs_type != "tmpfs" {
+                return true;
+            }
+        }
     }
 
-    match get_linux_mount_info(path) {
-        Ok(info) => info.fs_type != "tmpfs",
-        Err(crate::mount::Error::NoMountEntry(_)) => true,
-        Err(_) => false,
-    }
+    false
 }
 
 // update_ephemeral_storage_type sets the mount type to 'ephemeral'
@@ -58,7 +61,7 @@ pub fn is_host_empty_dir(path: &str) -> bool {
 // For the given pod ephemeral volume is created only once
 // backed by tmpfs inside the VM. For successive containers
 // of the same pod the already existing volume is reused.
-pub fn update_ephemeral_storage_type(oci_spec: &mut Spec, disable_guest_empty_dir: bool) {
+pub fn update_ephemeral_storage_type(oci_spec: &mut Spec) {
     if let Some(mounts) = oci_spec.mounts_mut() {
         for m in mounts.iter_mut() {
             if let Some(typ) = &m.typ() {
@@ -69,12 +72,13 @@ pub fn update_ephemeral_storage_type(oci_spec: &mut Spec, disable_guest_empty_di
 
             if let Some(source) = &m.source() {
                 let mnt_src = &source.display().to_string();
-                // We only care about the "bind" mount volume here.
+                //here we only care about the "bind" mount volume.
                 if is_ephemeral_volume(m) {
                     m.set_typ(Some(String::from(mount::KATA_EPHEMERAL_VOLUME_TYPE)));
-                }
-                if is_host_empty_dir(mnt_src) && !disable_guest_empty_dir {
-                    m.set_typ(Some(mount::KATA_K8S_LOCAL_STORAGE_TYPE.to_string()));
+                } else if is_host_empty_dir(mnt_src) {
+                    // FIXME support disable_guest_empty_dir
+                    // https://github.com/kata-containers/kata-containers/blob/02a51e75a7e0c6fce5e8abe3b991eeac87e09645/src/runtime/pkg/katautils/create.go#L105
+                    m.set_typ(Some(String::from(mount::KATA_HOST_DIR_VOLUME_TYPE)));
                 }
             }
         }

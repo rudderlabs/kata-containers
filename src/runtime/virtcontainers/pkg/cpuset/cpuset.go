@@ -236,7 +236,7 @@ func (s CPUSet) String() string {
 		if r.start == r.end {
 			result.WriteString(strconv.Itoa(r.start))
 		} else {
-			fmt.Fprintf(&result, "%d-%d", r.start, r.end)
+			result.WriteString(fmt.Sprintf("%d-%d", r.start, r.end))
 		}
 		result.WriteString(",")
 	}

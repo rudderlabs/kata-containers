@@ -5,16 +5,14 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-load "${BATS_TEST_DIRNAME}/lib.sh"
 load "${BATS_TEST_DIRNAME}/../../common.bash"
 load "${BATS_TEST_DIRNAME}/tests_common.sh"
 
 setup() {
-	setup_common || die "setup_common failed"
-
 	pod_name="busybox"
 	first_container_name="first-test-container"
 
+	get_pod_config_dir
 	yaml_file="${pod_config_dir}/initcontainer-shareprocesspid.yaml"
 
 	policy_settings_dir="$(create_tmp_policy_settings_dir "${pod_config_dir}")"
@@ -37,7 +35,7 @@ setup() {
 	first_pid_container=$(kubectl exec $pod_name -c $first_container_name \
 		-- $command | grep "tail" || true)
 	# Verify that the tail process didn't exist
-	[ -z $first_pid_container ] || die "found processes pid: $first_pid_container"
+	[ -z $first_pid_container ] || die "found processes pid: $first_pid_container" 
 }
 
 teardown() {
@@ -47,5 +45,4 @@ teardown() {
 	kubectl delete pod "$pod_name"
 
 	delete_tmp_policy_settings_dir "${policy_settings_dir}"
-	teardown_common "${node}" "${node_start_time:-}"
 }

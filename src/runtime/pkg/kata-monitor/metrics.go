@@ -259,7 +259,7 @@ func (km *KataMonitor) aggregateSandboxMetrics(encoder expfmt.Encoder, filterFam
 }
 
 func getParsedMetrics(sandboxID string, sandboxMetadata sandboxCRIMetadata) ([]*dto.MetricFamily, error) {
-	body, err := shimclient.DoGet(sandboxID, defaultTimeout, containerdshim.MetricsURL)
+	body, err := shimclient.DoGet(sandboxID, defaultTimeout, containerdshim.MetricsUrl)
 	if err != nil {
 		return nil, err
 	}
@@ -269,7 +269,7 @@ func getParsedMetrics(sandboxID string, sandboxMetadata sandboxCRIMetadata) ([]*
 
 // GetSandboxMetrics will get sandbox's metrics from shim
 func GetSandboxMetrics(sandboxID string) (string, error) {
-	body, err := shimclient.DoGet(sandboxID, defaultTimeout, containerdshim.MetricsURL)
+	body, err := shimclient.DoGet(sandboxID, defaultTimeout, containerdshim.MetricsUrl)
 	if err != nil {
 		return "", err
 	}
@@ -281,7 +281,7 @@ func GetSandboxMetrics(sandboxID string) (string, error) {
 // and return array of *dto.MetricFamily with an ASC order
 func parsePrometheusMetrics(sandboxID string, sandboxMetadata sandboxCRIMetadata, body []byte) ([]*dto.MetricFamily, error) {
 	reader := bytes.NewReader(body)
-	decoder := expfmt.NewDecoder(reader, expfmt.NewFormat(expfmt.TypeTextPlain))
+	decoder := expfmt.NewDecoder(reader, expfmt.FmtText)
 
 	// decode metrics from sandbox to MetricFamily
 	list := make([]*dto.MetricFamily, 0)

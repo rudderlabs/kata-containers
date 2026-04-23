@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestCopyResponseAddingSandboxIDToHref(t *testing.T) {
+func TestCopyResponseAddingSandboxIdToHref(t *testing.T) {
 	assert := assert.New(t)
 
 	htmlIn := strings.NewReader(`
@@ -112,6 +112,6 @@ Profile Descriptions:
 
 	req := &http.Request{URL: &url.URL{RawQuery: "sandbox=1234567890"}}
 	buf := bytes.NewBuffer(nil)
-	copyResponseAddingSandboxIDToHref(req, buf, htmlIn)
+	copyResponseAddingSandboxIdToHref(req, buf, htmlIn)
 	assert.Equal(htmlExpected, buf)
 }

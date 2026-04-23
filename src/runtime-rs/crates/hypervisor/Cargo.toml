@@ -15,25 +15,27 @@ go-flag = { workspace = true }
 libc = { workspace = true }
 nix = { workspace = true }
 rust-ini = "0.18.0"
-seccompiler = "0.5.0"
+seccompiler = "0.2.0"
 serde = { workspace = true }
 serde_json = { workspace = true }
 slog = { workspace = true }
 slog-scope = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync", "fs", "process", "io-util"] }
-vmm-sys-util = "0.15.0"
+vmm-sys-util = "0.11.0"
 rand = { workspace = true }
 path-clean = "1.0.1"
 lazy_static = { workspace = true }
 tracing = { workspace = true }
 ttrpc = { workspace = true, features = ["async"] }
+protobuf = { workspace = true }
+oci-spec = { workspace = true }
 futures = "0.3.25"
 safe-path = "0.1.0"
 crossbeam-channel = "0.5.6"
-qapi = { version = "0.15", features = ["qmp", "async-tokio-all"] }
-qapi-spec = "0.3.2"
-qapi-qmp = "0.15.0"
+qapi = { version = "0.14", features = ["qmp", "async-tokio-all"] }
+qapi-spec = "0.3.1"
+qapi-qmp = "0.14.0"
 hyperlocal = { workspace = true }
 hyper = { workspace = true, features = ["client"] }
 
@@ -42,6 +44,7 @@ kata-sys-util = { workspace = true }
 kata-types = { workspace = true }
 logging = { workspace = true }
 protocols = { workspace = true, features = ["async"] }
+shim-interface = { workspace = true }
 persist = { workspace = true }
 ch-config = { workspace = true, optional = true }
 tests_utils = { workspace = true }
@@ -82,7 +85,7 @@ hypervisor = { workspace = true, features = ["cloud-hypervisor"] }
 test-utils = { workspace = true }
 
 [build-dependencies]
-ttrpc-codegen = "0.6.0"
+ttrpc-codegen = "0.4.2"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [

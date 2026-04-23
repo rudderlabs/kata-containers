@@ -149,25 +149,7 @@ paths:
           description: The VM instance was successfully resized.
         "404":
           description: The VM instance could not be resized because it is not created.
-        "429":
-          description: The VM instance could not be resized because a cpu removal
-            is still pending.
       summary: Resize the VM
-  /vm.resize-disk:
-    put:
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/VmResizeDisk'
-        description: Resizes a disk attached to the VM
-        required: true
-      responses:
-        "204":
-          description: The disk was successfully resized.
-        "500":
-          description: The disk could not be resized.
-      summary: Resize a disk
   /vm.resize-zone:
     put:
       requestBody:
@@ -484,7 +466,7 @@ components:
     VmInfo:
       description: Virtual Machine information
       example:
-        memory_actual_size: 4
+        memory_actual_size: 7
         state: Created
         config:
           memory:
@@ -526,7 +508,6 @@ components:
             rate_limit_group: rate_limit_group
             queue_size: 6
             direct: false
-            backing_files: false
             rate_limiter_config:
               ops:
                 size: 0
@@ -551,15 +532,12 @@ components:
             iommu: false
             vhost_socket: vhost_socket
             serial: serial
-            sparse: true
             vhost_user: false
             id: id
-            image_type: FixedVhd
           - num_queues: 9
             rate_limit_group: rate_limit_group
             queue_size: 6
             direct: false
-            backing_files: false
             rate_limiter_config:
               ops:
                 size: 0
@@ -584,10 +562,15 @@ components:
             iommu: false
             vhost_socket: vhost_socket
             serial: serial
-            sparse: true
             vhost_user: false
             id: id
-            image_type: FixedVhd
+          sgx_epc:
+          - prefault: false
+            size: 7
+            id: id
+          - prefault: false
+            size: 7
+            id: id
           fs:
           - pci_segment: 6
             num_queues: 6
@@ -609,10 +592,10 @@ components:
             cid: 3
           platform:
             iommu_segments:
-            - 4
-            - 4
-            num_pci_segments: 6
-            iommu_address_width: 1
+            - 1
+            - 1
+            num_pci_segments: 4
+            iommu_address_width: 4
             oem_strings:
             - oem_strings
             - oem_strings
@@ -670,9 +653,7 @@ components:
           - tap: tap
             host_mac: host_mac
             num_queues: 6
-            offload_ufo: true
             queue_size: 1
-            offload_csum: true
             ip: 192.168.249.1
             rate_limiter_config:
               ops:
@@ -686,7 +667,6 @@ components:
             mac: mac
             mtu: 3
             pci_segment: 2
-            offload_tso: true
             vhost_mode: Client
             iommu: false
             vhost_socket: vhost_socket
@@ -696,9 +676,7 @@ components:
           - tap: tap
             host_mac: host_mac
             num_queues: 6
-            offload_ufo: true
             queue_size: 1
-            offload_csum: true
             ip: 192.168.249.1
             rate_limiter_config:
               ops:
@@ -712,7 +690,6 @@ components:
             mac: mac
             mtu: 3
             pci_segment: 2
-            offload_tso: true
             vhost_mode: Client
             iommu: false
             vhost_socket: vhost_socket
@@ -741,7 +718,6 @@ components:
             max_phys_bits: 7
             boot_vcpus: 1
             max_vcpus: 1
-            nested: true
             affinity:
             - vcpu: 9
               host_cpus:
@@ -775,37 +751,41 @@ components:
             id: id
           numa:
           - distances:
-            - distance: 7
-              destination: 3
-            - distance: 7
-              destination: 3
+            - distance: 5
+              destination: 7
+            - distance: 5
+              destination: 7
             pci_segments:
-            - 5
-            - 5
-            device_id: device_id
+            - 3
+            - 3
             cpus:
             - 3
             - 3
+            sgx_epc_sections:
+            - sgx_epc_sections
+            - sgx_epc_sections
             memory_zones:
             - memory_zones
             - memory_zones
-            guest_numa_id: 7
+            guest_numa_id: 3
           - distances:
-            - distance: 7
-              destination: 3
-            - distance: 7
-              destination: 3
+            - distance: 5
+              destination: 7
+            - distance: 5
+              destination: 7
             pci_segments:
-            - 5
-            - 5
-            device_id: device_id
+            - 3
+            - 3
             cpus:
             - 3
             - 3
+            sgx_epc_sections:
+            - sgx_epc_sections
+            - sgx_epc_sections
             memory_zones:
             - memory_zones
             - memory_zones
-            guest_numa_id: 7
+            guest_numa_id: 3
           rng:
             iommu: false
             src: src
@@ -813,12 +793,12 @@ components:
             socket: socket
           watchdog: false
           pci_segments:
-          - pci_segment: 3
-            mmio32_aperture_weight: 4
-            mmio64_aperture_weight: 0
-          - pci_segment: 3
-            mmio32_aperture_weight: 4
-            mmio64_aperture_weight: 0
+          - pci_segment: 4
+            mmio32_aperture_weight: 0
+            mmio64_aperture_weight: 6
+          - pci_segment: 4
+            mmio32_aperture_weight: 0
+            mmio64_aperture_weight: 6
           landlock_enable: false
           serial:
             mode: "Off"
@@ -971,7 +951,6 @@ components:
           rate_limit_group: rate_limit_group
           queue_size: 6
           direct: false
-          backing_files: false
           rate_limiter_config:
             ops:
               size: 0
@@ -996,15 +975,12 @@ components:
           iommu: false
           vhost_socket: vhost_socket
           serial: serial
-          sparse: true
           vhost_user: false
           id: id
-          image_type: FixedVhd
         - num_queues: 9
           rate_limit_group: rate_limit_group
           queue_size: 6
           direct: false
-          backing_files: false
           rate_limiter_config:
             ops:
               size: 0
@@ -1029,10 +1005,15 @@ components:
           iommu: false
           vhost_socket: vhost_socket
           serial: serial
-          sparse: true
           vhost_user: false
           id: id
-          image_type: FixedVhd
+        sgx_epc:
+        - prefault: false
+          size: 7
+          id: id
+        - prefault: false
+          size: 7
+          id: id
         fs:
         - pci_segment: 6
           num_queues: 6
@@ -1054,10 +1035,10 @@ components:
           cid: 3
         platform:
           iommu_segments:
-          - 4
-          - 4
-          num_pci_segments: 6
-          iommu_address_width: 1
+          - 1
+          - 1
+          num_pci_segments: 4
+          iommu_address_width: 4
           oem_strings:
           - oem_strings
           - oem_strings
@@ -1115,9 +1096,7 @@ components:
         - tap: tap
           host_mac: host_mac
           num_queues: 6
-          offload_ufo: true
           queue_size: 1
-          offload_csum: true
           ip: 192.168.249.1
           rate_limiter_config:
             ops:
@@ -1131,7 +1110,6 @@ components:
           mac: mac
           mtu: 3
           pci_segment: 2
-          offload_tso: true
           vhost_mode: Client
           iommu: false
           vhost_socket: vhost_socket
@@ -1141,9 +1119,7 @@ components:
         - tap: tap
           host_mac: host_mac
           num_queues: 6
-          offload_ufo: true
           queue_size: 1
-          offload_csum: true
           ip: 192.168.249.1
           rate_limiter_config:
             ops:
@@ -1157,7 +1133,6 @@ components:
           mac: mac
           mtu: 3
           pci_segment: 2
-          offload_tso: true
           vhost_mode: Client
           iommu: false
           vhost_socket: vhost_socket
@@ -1186,7 +1161,6 @@ components:
           max_phys_bits: 7
           boot_vcpus: 1
           max_vcpus: 1
-          nested: true
           affinity:
           - vcpu: 9
             host_cpus:
@@ -1220,37 +1194,41 @@ components:
           id: id
         numa:
         - distances:
-          - distance: 7
-            destination: 3
-          - distance: 7
-            destination: 3
+          - distance: 5
+            destination: 7
+          - distance: 5
+            destination: 7
           pci_segments:
-          - 5
-          - 5
-          device_id: device_id
+          - 3
+          - 3
           cpus:
           - 3
           - 3
+          sgx_epc_sections:
+          - sgx_epc_sections
+          - sgx_epc_sections
           memory_zones:
           - memory_zones
           - memory_zones
-          guest_numa_id: 7
+          guest_numa_id: 3
         - distances:
-          - distance: 7
-            destination: 3
-          - distance: 7
-            destination: 3
+          - distance: 5
+            destination: 7
+          - distance: 5
+            destination: 7
           pci_segments:
-          - 5
-          - 5
-          device_id: device_id
+          - 3
+          - 3
           cpus:
           - 3
           - 3
+          sgx_epc_sections:
+          - sgx_epc_sections
+          - sgx_epc_sections
           memory_zones:
           - memory_zones
           - memory_zones
-          guest_numa_id: 7
+          guest_numa_id: 3
         rng:
           iommu: false
           src: src
@@ -1258,12 +1236,12 @@ components:
           socket: socket
         watchdog: false
         pci_segments:
-        - pci_segment: 3
-          mmio32_aperture_weight: 4
-          mmio64_aperture_weight: 0
-        - pci_segment: 3
-          mmio32_aperture_weight: 4
-          mmio64_aperture_weight: 0
+        - pci_segment: 4
+          mmio32_aperture_weight: 0
+          mmio64_aperture_weight: 6
+        - pci_segment: 4
+          mmio32_aperture_weight: 0
+          mmio64_aperture_weight: 6
         landlock_enable: false
         serial:
           mode: "Off"
@@ -1322,6 +1300,10 @@ components:
           type: array
         vsock:
           $ref: '#/components/schemas/VsockConfig'
+        sgx_epc:
+          items:
+            $ref: '#/components/schemas/SgxEpcConfig'
+          type: array
         numa:
           items:
             $ref: '#/components/schemas/NumaConfig'
@@ -1406,7 +1388,6 @@ components:
         max_phys_bits: 7
         boot_vcpus: 1
         max_vcpus: 1
-        nested: true
         affinity:
         - vcpu: 9
           host_cpus:
@@ -1430,9 +1411,6 @@ components:
           type: boolean
         max_phys_bits:
           type: integer
-        nested:
-          default: true
-          type: boolean
         affinity:
           items:
             $ref: '#/components/schemas/CpuAffinity'
@@ -1445,9 +1423,9 @@ components:
       type: object
     PciSegmentConfig:
       example:
-        pci_segment: 3
-        mmio32_aperture_weight: 4
-        mmio64_aperture_weight: 0
+        pci_segment: 4
+        mmio32_aperture_weight: 0
+        mmio64_aperture_weight: 6
       properties:
         pci_segment:
           format: int16
@@ -1464,10 +1442,10 @@ components:
     PlatformConfig:
       example:
         iommu_segments:
-        - 4
-        - 4
-        num_pci_segments: 6
-        iommu_address_width: 1
+        - 1
+        - 1
+        num_pci_segments: 4
+        iommu_address_width: 4
         oem_strings:
         - oem_strings
         - oem_strings
@@ -1720,7 +1698,6 @@ components:
         rate_limit_group: rate_limit_group
         queue_size: 6
         direct: false
-        backing_files: false
         rate_limiter_config:
           ops:
             size: 0
@@ -1745,10 +1722,8 @@ components:
         iommu: false
         vhost_socket: vhost_socket
         serial: serial
-        sparse: true
         vhost_user: false
         id: id
-        image_type: FixedVhd
       properties:
         path:
           type: string
@@ -1787,29 +1762,15 @@ components:
           items:
             $ref: '#/components/schemas/VirtQueueAffinity'
           type: array
-        backing_files:
-          default: false
-          type: boolean
-        sparse:
-          default: true
-          type: boolean
-        image_type:
-          enum:
-          - FixedVhd
-          - Qcow2
-          - Raw
-          - Vhdx
-          - Unknown
-          type: string
+      required:
+      - path
       type: object
     NetConfig:
       example:
         tap: tap
         host_mac: host_mac
         num_queues: 6
-        offload_ufo: true
         queue_size: 1
-        offload_csum: true
         ip: 192.168.249.1
         rate_limiter_config:
           ops:
@@ -1823,7 +1784,6 @@ components:
         mac: mac
         mtu: 3
         pci_segment: 2
-        offload_tso: true
         vhost_mode: Client
         iommu: false
         vhost_socket: vhost_socket
@@ -1835,12 +1795,9 @@ components:
           type: string
         ip:
           default: 192.168.249.1
-          description: IPv4 or IPv6 address
           type: string
         mask:
           default: 255.255.255.0
-          description: Must be a valid IPv4 netmask if ip is an IPv4 address or a
-            valid IPv6 netmask if ip is an IPv6 address.
           type: string
         mac:
           type: string
@@ -1872,15 +1829,6 @@ components:
           type: integer
         rate_limiter_config:
           $ref: '#/components/schemas/RateLimiterConfig'
-        offload_tso:
-          default: true
-          type: boolean
-        offload_ufo:
-          default: true
-          type: boolean
-        offload_csum:
-          default: true
-          type: boolean
       type: object
     RngConfig:
       example:
@@ -2106,10 +2054,28 @@ components:
       - cid
       - socket
       type: object
+    SgxEpcConfig:
+      example:
+        prefault: false
+        size: 7
+        id: id
+      properties:
+        id:
+          type: string
+        size:
+          format: int64
+          type: integer
+        prefault:
+          default: false
+          type: boolean
+      required:
+      - id
+      - size
+      type: object
     NumaDistance:
       example:
-        distance: 7
-        destination: 3
+        distance: 5
+        destination: 7
       properties:
         destination:
           format: int32
@@ -2124,21 +2090,23 @@ components:
     NumaConfig:
       example:
         distances:
-        - distance: 7
-          destination: 3
-        - distance: 7
-          destination: 3
+        - distance: 5
+          destination: 7
+        - distance: 5
+          destination: 7
         pci_segments:
-        - 5
-        - 5
-        device_id: device_id
+        - 3
+        - 3
         cpus:
         - 3
         - 3
+        sgx_epc_sections:
+        - sgx_epc_sections
+        - sgx_epc_sections
         memory_zones:
         - memory_zones
         - memory_zones
-        guest_numa_id: 7
+        guest_numa_id: 3
       properties:
         guest_numa_id:
           format: int32
@@ -2156,13 +2124,15 @@ components:
           items:
             type: string
           type: array
+        sgx_epc_sections:
+          items:
+            type: string
+          type: array
         pci_segments:
           items:
             format: int32
             type: integer
           type: array
-        device_id:
-          type: string
       required:
       - guest_numa_id
       type: object
@@ -2181,19 +2151,6 @@ components:
           type: integer
         desired_balloon:
           description: desired balloon size in bytes
-          format: int64
-          type: integer
-      type: object
-    VmResizeDisk:
-      example:
-        desired_size: 0
-        id: id
-      properties:
-        id:
-          description: disk identifier
-          type: string
-        desired_size:
-          description: desired disk size in bytes
           format: int64
           type: integer
       type: object

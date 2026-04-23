@@ -66,10 +66,9 @@ impl DeviceHandler for VfioPciDeviceHandler {
                 .ok_or_else(|| anyhow!("Malformed VFIO PCI option {:?}", opt))?;
             let host =
                 pci::Address::from_str(host).context("Bad host PCI address in VFIO option {:?}")?;
+            let pcipath = pci::Path::from_str(pcipath)?;
 
-            let (root_complex, pcipath) = pcipath_from_dev_tree_path(pcipath)?;
-
-            let guestdev = wait_for_pci_device(ctx.sandbox, root_complex, &pcipath).await?;
+            let guestdev = wait_for_pci_device(ctx.sandbox, &pcipath).await?;
             if vfio_in_guest {
                 pci_driver_override(ctx.logger, SYSFS_BUS_PCI_PATH, guestdev, "vfio-pci")?;
 
@@ -171,7 +170,7 @@ pub struct VfioMatcher {
 impl VfioMatcher {
     pub fn new(grp: IommuGroup) -> VfioMatcher {
         VfioMatcher {
-            syspath: format!("/devices/virtual/vfio/{grp}"),
+            syspath: format!("/devices/virtual/vfio/{}", grp),
         }
     }
 }
@@ -213,10 +212,10 @@ pub struct PciMatcher {
 }
 
 impl PciMatcher {
-    pub fn new(relpath: &str, root_complex: &str) -> Result<PciMatcher> {
-        let root_bus = create_pci_root_bus_path(root_complex);
+    pub fn new(relpath: &str) -> Result<PciMatcher> {
+        let root_bus = create_pci_root_bus_path();
         Ok(PciMatcher {
-            devpath: format!("{root_bus}{relpath}"),
+            devpath: format!("{}{}", root_bus, relpath),
         })
     }
 }
@@ -303,12 +302,11 @@ async fn associate_ap_device(apqn: &Apqn, mkvp: &str) -> Result<()> {
 
 pub async fn wait_for_pci_device(
     sandbox: &Arc<Mutex<Sandbox>>,
-    root_complex: &str,
     pcipath: &pci::Path,
 ) -> Result<pci::Address> {
-    let root_bus_sysfs = format!("{}{}", SYSFS_DIR, create_pci_root_bus_path(root_complex));
+    let root_bus_sysfs = format!("{}{}", SYSFS_DIR, create_pci_root_bus_path());
     let sysfs_rel_path = pcipath_to_sysfs(&root_bus_sysfs, pcipath)?;
-    let matcher = PciMatcher::new(&sysfs_rel_path, root_complex)?;
+    let matcher = PciMatcher::new(&sysfs_rel_path)?;
 
     let uev = wait_for_uevent(sandbox, matcher).await?;
 
@@ -427,12 +425,12 @@ mod tests {
 
         let mut uev_a = crate::uevent::Uevent::default();
         uev_a.action = crate::linux_abi::U_EVENT_ACTION_ADD.to_string();
-        uev_a.devname = format!("vfio/{grpa}");
-        uev_a.devpath = format!("/devices/virtual/vfio/{grpa}");
+        uev_a.devname = format!("vfio/{}", grpa);
+        uev_a.devpath = format!("/devices/virtual/vfio/{}", grpa);
         let matcher_a = VfioMatcher::new(grpa);
 
         let mut uev_b = uev_a.clone();
-        uev_b.devpath = format!("/devices/virtual/vfio/{grpb}");
+        uev_b.devpath = format!("/devices/virtual/vfio/{}", grpb);
         let matcher_b = VfioMatcher::new(grpb);
 
         assert!(matcher_a.is_match(&uev_a));
@@ -533,12 +531,12 @@ mod tests {
     async fn test_vfio_ap_matcher() {
         let subsystem = "ap";
         let card = "0a";
-        let relpath = format!("{card}.0001");
+        let relpath = format!("{}.0001", card);
 
         let mut uev = Uevent::default();
         uev.action = U_EVENT_ACTION_ADD.to_string();
         uev.subsystem = subsystem.to_string();
-        uev.devpath = format!("{AP_ROOT_BUS_PATH}/card{card}/{relpath}");
+        uev.devpath = format!("{}/card{}/{}", AP_ROOT_BUS_PATH, card, relpath);
 
         let ap_address = ap::Address::from_str(&relpath).unwrap();
         let matcher = ApMatcher::new(ap_address);
@@ -550,7 +548,7 @@ mod tests {
         assert!(!matcher.is_match(&uev_remove));
 
         let mut uev_other_device = uev.clone();
-        uev_other_device.devpath = format!("{AP_ROOT_BUS_PATH}/card{card}/{card}.0002");
+        uev_other_device.devpath = format!("{}/card{}/{}.0002", AP_ROOT_BUS_PATH, card, card);
         assert!(!matcher.is_match(&uev_other_device));
     }
 }

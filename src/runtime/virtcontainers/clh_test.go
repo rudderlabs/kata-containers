@@ -69,7 +69,6 @@ func newClhConfig() (HypervisorConfig, error) {
 		NetRateLimiterOpsMaxRate:      int64(0),
 		NetRateLimiterOpsOneTimeBurst: int64(0),
 		HotPlugVFIO:                   config.NoPort,
-		DisableImageNvdimm:            true,
 	}, nil
 }
 
@@ -148,7 +147,7 @@ func TestCloudHypervisorAddNetCheckNetConfigListValues(t *testing.T) {
 
 	e := &VethEndpoint{}
 	e.NetPair.TAPIface.HardAddr = macTest
-	e.NetPair.VMFds = vmFds
+	e.NetPair.TapInterface.VMFds = vmFds
 
 	err = clh.addNet(e)
 	assert.Nil(err)
@@ -183,7 +182,7 @@ func TestCloudHypervisorAddNetCheckEnpointTypes(t *testing.T) {
 
 	validVeth := &VethEndpoint{}
 	validVeth.NetPair.TAPIface.HardAddr = macTest
-	validVeth.NetPair.VMFds = vmFds
+	validVeth.NetPair.TapInterface.VMFds = vmFds
 
 	type args struct {
 		e Endpoint
@@ -224,7 +223,7 @@ func TestCloudHypervisorNetRateLimiter(t *testing.T) {
 	vmFds = append(vmFds, file)
 
 	validVeth := &VethEndpoint{}
-	validVeth.NetPair.VMFds = vmFds
+	validVeth.NetPair.TapInterface.VMFds = vmFds
 
 	type args struct {
 		bwMaxRate       int64
@@ -398,7 +397,7 @@ func TestCloudHypervisorBootVM(t *testing.T) {
 	clh.APIClient = &clhClientMock{}
 
 	savedVmAddNetPutRequestFunc := vmAddNetPutRequest
-	vmAddNetPutRequest = func(clh *cloudHypervisor) ([]chclient.PciDeviceInfo, error) { return nil, nil }
+	vmAddNetPutRequest = func(clh *cloudHypervisor) error { return nil }
 	defer func() {
 		vmAddNetPutRequest = savedVmAddNetPutRequestFunc
 	}()
@@ -527,7 +526,7 @@ func TestCloudHypervisorStartSandbox(t *testing.T) {
 	assert.NoError(err)
 
 	savedVmAddNetPutRequestFunc := vmAddNetPutRequest
-	vmAddNetPutRequest = func(clh *cloudHypervisor) ([]chclient.PciDeviceInfo, error) { return nil, nil }
+	vmAddNetPutRequest = func(clh *cloudHypervisor) error { return nil }
 	defer func() {
 		vmAddNetPutRequest = savedVmAddNetPutRequestFunc
 	}()
@@ -680,94 +679,6 @@ func TestCloudHypervisorHotplugRemoveDevice(t *testing.T) {
 
 	_, err = clh.HotplugRemoveDevice(context.Background(), nil, NetDev)
 	assert.Error(err, "Hotplug remove pmem block device expected error")
-}
-
-func TestCloudHypervisorColdPlugVFIODevice(t *testing.T) {
-	assert := assert.New(t)
-
-	clhConfig, err := newClhConfig()
-	assert.NoError(err)
-
-	clh := &cloudHypervisor{}
-	clh.config = clhConfig
-	clh.devicesIds = make(map[string]string)
-	clh.vmconfig = *chclient.NewVmConfig(*chclient.NewPayloadConfig())
-
-	// Cold-plug a PCI VFIO device
-	dev := &config.VFIODev{
-		ID:       "gpu0",
-		SysfsDev: "/sys/bus/pci/devices/0000:41:00.0",
-		BDF:      "0000:41:00.0",
-		Type:     config.VFIOPCIDeviceNormalType,
-	}
-	err = clh.coldPlugVFIODevice(dev)
-	assert.NoError(err, "Cold-plug PCI VFIO device expected no error")
-
-	// Verify the device was added to vmconfig.Devices
-	assert.NotNil(clh.vmconfig.Devices)
-	assert.Len(*clh.vmconfig.Devices, 1)
-	assert.Equal("/sys/bus/pci/devices/0000:41:00.0", (*clh.vmconfig.Devices)[0].Path)
-	assert.Equal("gpu0", clh.devicesIds["gpu0"])
-
-	// Cold-plug a second device
-	dev2 := &config.VFIODev{
-		ID:       "gpu1",
-		SysfsDev: "/sys/bus/pci/devices/0000:42:00.0",
-		BDF:      "0000:42:00.0",
-		Type:     config.VFIOPCIDeviceNormalType,
-	}
-	err = clh.coldPlugVFIODevice(dev2)
-	assert.NoError(err, "Cold-plug second VFIO device expected no error")
-	assert.Len(*clh.vmconfig.Devices, 2)
-
-	// AP mediated device should fail
-	apDev := &config.VFIODev{
-		ID:   "ap0",
-		Type: config.VFIOAPDeviceMediatedType,
-	}
-	err = clh.coldPlugVFIODevice(apDev)
-	assert.Error(err, "Cold-plug AP mediated device expected error")
-
-	// Error type (0) should fail
-	errDev := &config.VFIODev{
-		ID:       "bad0",
-		SysfsDev: "/sys/bus/pci/devices/0000:43:00.0",
-		Type:     config.VFIODeviceErrorType,
-	}
-	err = clh.coldPlugVFIODevice(errDev)
-	assert.Error(err, "Cold-plug error-type device expected error")
-
-	// Empty SysfsDev should fail
-	emptySysfsDev := &config.VFIODev{
-		ID:   "bad1",
-		Type: config.VFIOPCIDeviceNormalType,
-	}
-	err = clh.coldPlugVFIODevice(emptySysfsDev)
-	assert.Error(err, "Cold-plug with empty SysfsDev expected error")
-}
-
-func TestCloudHypervisorAddDeviceVFIO(t *testing.T) {
-	assert := assert.New(t)
-
-	clhConfig, err := newClhConfig()
-	assert.NoError(err)
-
-	clh := &cloudHypervisor{}
-	clh.config = clhConfig
-	clh.devicesIds = make(map[string]string)
-	clh.vmconfig = *chclient.NewVmConfig(*chclient.NewPayloadConfig())
-
-	// AddDevice with VFIODev type should cold-plug
-	dev := config.VFIODev{
-		ID:       "nic0",
-		SysfsDev: "/sys/bus/pci/devices/0000:05:00.0",
-		BDF:      "0000:05:00.0",
-		Type:     config.VFIOPCIDeviceNormalType,
-	}
-	err = clh.AddDevice(context.Background(), dev, VfioDev)
-	assert.NoError(err, "AddDevice VFIO expected no error")
-	assert.NotNil(clh.vmconfig.Devices)
-	assert.Len(*clh.vmconfig.Devices, 1)
 }
 
 func TestClhGenerateSocket(t *testing.T) {

@@ -13,7 +13,8 @@ TEST_INITRD="${TEST_INITRD:-no}"
 setup() {
 	[ "${KATA_HYPERVISOR}" == "firecracker" ] && skip "test not working see: ${fc_limitations}"
 	[ "${KATA_HYPERVISOR}" == "fc" ] && skip "test not working see: ${fc_limitations}"
-	setup_common || die "setup_common failed"
+
+	get_pod_config_dir
 
 	node=$(get_one_kata_node)
 	tmp_file=$(mktemp -u /tmp/data.XXXX)
@@ -27,15 +28,7 @@ setup() {
 	sed -e "s|tmp_data|${tmp_file}|g" ${pod_config_dir}/pv-volume.yaml > "$pv_yaml"
 	sed -e "s|NODE|${node}|g" "${pod_config_dir}/pv-pod.yaml" > "$pod_yaml"
 
-	# Add policy to the pod yaml
-	policy_settings_dir="$(create_tmp_policy_settings_dir "${pod_config_dir}")"
-
-	cmd="cat /mnt/index.html"
-	exec_command=(sh -c "${cmd}")
-	add_exec_to_policy_settings "${policy_settings_dir}" "${exec_command[@]}"
-
-	add_requests_to_policy_settings "${policy_settings_dir}" "ReadStreamRequest"
-	auto_generate_policy "${policy_settings_dir}" "${pod_yaml}"
+	add_allow_all_policy_to_yaml "${pod_yaml}"
 }
 
 @test "Create Persistent Volume" {
@@ -64,7 +57,8 @@ setup() {
 	# Check pod creation
 	kubectl wait --for=condition=Ready --timeout=$timeout pod "$pod_name"
 
-	grep_pod_exec_output "$pod_name" "$msg" "${exec_command[@]}"
+	cmd="cat /mnt/index.html"
+	kubectl exec $pod_name -- sh -c "$cmd" | grep "$msg"
 }
 
 teardown() {
@@ -80,7 +74,4 @@ teardown() {
 	kubectl delete pv "$volume_name"
 	rm -f "$pv_yaml"
 	exec_host "$node" rm -rf "$tmp_file"
-
-	delete_tmp_policy_settings_dir "${policy_settings_dir}"
-	teardown_common "${node}" "${node_start_time:-}"
 }

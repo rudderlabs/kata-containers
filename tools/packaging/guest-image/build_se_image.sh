@@ -47,8 +47,8 @@ build_image() {
 	image_source_dir="${builddir}/secure-image"
 	mkdir -p "${image_source_dir}"
 	pushd "${tarball_dir}"
-	for tarball_id in kernel rootfs-initrd-confidential; do
-		tar --zstd -xvf kata-static-${tarball_id}.tar.zst -C "${image_source_dir}"
+	for tarball_id in kernel-confidential rootfs-initrd-confidential; do
+		tar xvf kata-static-${tarball_id}.tar.xz -C "${image_source_dir}"
 	done
 	popd
 

@@ -18,6 +18,3 @@ ifneq (,$(NEEDS_CC_SETTING))
 	CC := gcc
 	export CC
 endif
-
-# Enable virtio-mem for s390x
-DEFENABLEVIRTIOMEM = true

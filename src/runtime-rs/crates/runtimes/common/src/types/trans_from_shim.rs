@@ -8,7 +8,6 @@ use super::{
     ContainerConfig, ContainerID, ContainerProcess, ExecProcessRequest, KillRequest,
     ResizePTYRequest, SandboxConfig, SandboxID, SandboxNetworkEnv, SandboxRequest,
     SandboxStatusRequest, ShutdownRequest, StopSandboxRequest, TaskRequest, UpdateRequest,
-    DEFAULT_SHM_SIZE,
 };
 
 use kata_types::mount::Mount;
@@ -85,7 +84,6 @@ impl TryFrom<sandbox_api::CreateSandboxRequest> for SandboxRequest {
                 bundle: from.bundle_path,
                 annotations: config.annotations,
             },
-            shm_size: DEFAULT_SHM_SIZE,
         })))
     }
 }

@@ -14,14 +14,13 @@ use vhost_rs::vhost_user::message::{
     VhostUserVringAddr, VhostUserVringState, MAX_MSG_SIZE,
 };
 use vhost_rs::vhost_user::Error;
-use vm_memory::ByteValued;
 use vmm_sys_util::sock_ctrl_msg::ScmSocket;
 use vmm_sys_util::tempfile::TempFile;
 
 pub const MAX_ATTACHED_FD_ENTRIES: usize = 32;
 
 pub(crate) trait Req:
-    Clone + Copy + Debug + PartialEq + Eq + PartialOrd + Ord + Into<u32> + Send + Sync
+    Clone + Copy + Debug + PartialEq + Eq + PartialOrd + Ord + Into<u32>
 {
     fn is_valid(&self) -> bool;
 }
@@ -104,9 +103,9 @@ pub enum MasterReq {
     MAX_CMD = 33,
 }
 
-impl From<MasterReq> for u32 {
-    fn from(val: MasterReq) -> Self {
-        val as u32
+impl Into<u32> for MasterReq {
+    fn into(self) -> u32 {
+        self as u32
     }
 }
 
@@ -215,10 +214,6 @@ impl<R: Req> Default for VhostUserMsgHeader<R> {
         }
     }
 }
-
-// SAFETY: VhostUserMsgHeader is a packed struct with only primitive (u32) fields and PhantomData.
-// All bit patterns are valid, and it has no padding bytes.
-unsafe impl<R: Req> ByteValued for VhostUserMsgHeader<R> {}
 
 /// Unix domain socket endpoint for vhost-user connection.
 pub(crate) struct Endpoint<R: Req> {
@@ -524,7 +519,6 @@ impl<R: Req> Endpoint<R> {
     /// * - OversizedMsg: message size is too big.
     /// * - PartialMessage: received a partial message.
     /// * - IncorrectFds: wrong number of attached fds.
-    #[allow(dead_code)]
     pub fn send_message_with_payload<T: Sized, P: Sized>(
         &mut self,
         hdr: &VhostUserMsgHeader<R>,
@@ -532,7 +526,7 @@ impl<R: Req> Endpoint<R> {
         payload: &[P],
         fds: Option<&[RawFd]>,
     ) -> Result<()> {
-        let len = std::mem::size_of_val(payload);
+        let len = payload.len() * mem::size_of::<P>();
         if len > MAX_MSG_SIZE - mem::size_of::<T>() {
             return Err(Error::OversizedMsg);
         }
@@ -572,7 +566,7 @@ impl<R: Req> Endpoint<R> {
     /// * - SocketError: other socket related errors.
     /// * - PartialMessage: received a partial message.
     /// * - InvalidMessage: received a invalid message.
-    #[cfg_attr(clippy, allow(clippy::type_complexity))]
+    #[cfg_attr(feature = "cargo-clippy", allow(clippy::type_complexity))]
     pub fn recv_payload_into_buf<T: Sized + Default + VhostUserMsgValidator>(
         &mut self,
         buf: &mut [u8],

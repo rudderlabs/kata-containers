@@ -10,10 +10,10 @@ use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use hypervisor::{
     device::{
-        device_manager::{do_handle_device, get_block_device_info, DeviceManager},
+        device_manager::{do_handle_device, get_block_driver, DeviceManager},
         DeviceConfig,
     },
-    BlockConfig, BlockDeviceAio,
+    BlockConfig,
 };
 use kata_sys_util::mount::get_mount_path;
 use nix::sys::{stat, stat::SFlag};
@@ -39,16 +39,12 @@ impl BlockVolume {
             Some(path) => path,
             None => return Err(anyhow!("mount source path is empty")),
         };
-
-        let blkdev_info = get_block_device_info(d).await;
+        let block_driver = get_block_driver(d).await;
         let fstat = stat::stat(mnt_src).context(format!("stat {}", mnt_src.display()))?;
         let block_device_config = BlockConfig {
             major: stat::major(fstat.st_rdev) as i64,
             minor: stat::minor(fstat.st_rdev) as i64,
-            driver_option: blkdev_info.block_device_driver,
-            blkdev_aio: BlockDeviceAio::new(&blkdev_info.block_device_aio),
-            num_queues: blkdev_info.num_queues,
-            queue_size: blkdev_info.queue_size,
+            driver_option: block_driver,
             ..Default::default()
         };
 

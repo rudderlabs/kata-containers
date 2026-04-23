@@ -12,11 +12,10 @@ updates:
       - "/src/tools/agent-ctl"
       - "/src/tools/genpolicy"
       - "/src/tools/kata-ctl"
+      - "/src/tools/runk"
       - "/src/tools/trace-forwarder"
     schedule:
       interval: "daily"
-    cooldown:
-      default-days: 7
     ignore:
     # rust-vmm repos might cause incompatibilities on patch versions, so
     # lets handle them manually for now.
@@ -37,9 +36,9 @@ updates:
     # create groups for common dependencies, so they can all go in a single PR
     # We can extend this as we see more frequent groups
     groups:
-      aws-libcrypto:
+      bit-vec:
         patterns:
-          - aws-lc-*
+          - bit-vec
       bumpalo:
         patterns:
           - bumpalo
@@ -67,12 +66,6 @@ updates:
       rustix:
         patterns:
           - rustix
-      rustls-webpki:
-        patterns:
-          - rustls-webpki
-      slab:
-        patterns:
-          - slab
       time:
         patterns:
           - time
@@ -90,12 +83,8 @@ updates:
       - "src/tools/csi-kata-directvolume"
     schedule:
       interval: "daily"
-    cooldown:
-      default-days: 7
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "monthly"
-    cooldown:
-      default-days: 7

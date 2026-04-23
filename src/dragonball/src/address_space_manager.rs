@@ -118,15 +118,11 @@ pub enum AddressManagerError {
 
     /// Failure in accessing the memory located at some address.
     #[error("address manager failed to access guest memory located at 0x{0:x}")]
-    AccessGuestMemory(u64, #[source] vm_memory::GuestMemoryError),
+    AccessGuestMemory(u64, #[source] vm_memory::mmap::Error),
 
     /// Failed to create GuestMemory
     #[error("address manager failed to create guest memory object")]
-    CreateGuestMemory(#[source] vm_memory::GuestMemoryError),
-
-    /// Failed to insert/manage guest memory region collection
-    #[error("address manager failed to manage guest memory region collection")]
-    GuestRegionCollection(#[source] vm_memory::GuestRegionCollectionError),
+    CreateGuestMemory(#[source] vm_memory::Error),
 
     /// Failure in initializing guest memory.
     #[error("address manager failed to initialize guest memory")]
@@ -274,7 +270,7 @@ impl AddressSpaceMgr {
 
         // Create address space regions.
         for info in numa_region_infos.iter() {
-            info!("numa_region_info {info:?}");
+            info!("numa_region_info {:?}", info);
             // convert size_in_mib to bytes
             let size = info
                 .size
@@ -332,7 +328,7 @@ impl AddressSpaceMgr {
 
             vm_memory = vm_memory
                 .insert_region(mmap_reg.clone())
-                .map_err(AddressManagerError::GuestRegionCollection)?;
+                .map_err(AddressManagerError::CreateGuestMemory)?;
             self.map_to_kvm(res_mgr, &param, reg, mmap_reg)?;
         }
 
@@ -492,11 +488,8 @@ impl AddressSpaceMgr {
             self.configure_thp_and_prealloc(&region, &mmap_reg)?;
         }
 
-        let reg = GuestRegionImpl::new(mmap_reg, region.start_addr()).ok_or(
-            AddressManagerError::GuestRegionCollection(
-                vm_memory::GuestRegionCollectionError::NoMemoryRegion,
-            ),
-        )?;
+        let reg = GuestRegionImpl::new(mmap_reg, region.start_addr())
+            .map_err(AddressManagerError::CreateGuestMemory)?;
         Ok(Arc::new(reg))
     }
 
@@ -528,7 +521,8 @@ impl AddressSpaceMgr {
         };
         if res < 0 {
             warn!(
-                "failed to mbind memory to host_numa_node_id {node_id}: this may affect performance"
+                "failed to mbind memory to host_numa_node_id {}: this may affect performance",
+                node_id
             );
         }
         Ok(())
@@ -586,10 +580,12 @@ impl AddressSpaceMgr {
                 let handler = thread::Builder::new()
                     .name("PreallocThread".to_string())
                     .spawn(move || {
-                        info!("PreallocThread start start_npage: {start_npage:?}, end_npage: {end_npage:?}, per_addr: {per_addr:?}, thread_number: {touch_thread:?}" );
+                        info!("PreallocThread start start_npage: {:?}, end_npage: {:?}, per_addr: {:?}, thread_number: {:?}",
+                              start_npage, end_npage, per_addr, touch_thread );
                         for _ in start_npage..end_npage {
                             if should_stop.load(Ordering::Acquire) {
-                                info!("PreallocThread stop start_npage: {start_npage:?}, end_npage: {end_npage:?}, per_addr: {per_addr:?}, thread_number: {touch_thread:?}");
+                                info!("PreallocThread stop start_npage: {:?}, end_npage: {:?}, per_addr: {:?}, thread_number: {:?}",
+                                      start_npage, end_npage, per_addr, touch_thread);
                                 break;
                             }
 
@@ -603,12 +599,14 @@ impl AddressSpaceMgr {
                             per_addr += PAGE_SIZE;
                         }
 
-                        info!("PreallocThread done start_npage: {start_npage:?}, end_npage: {end_npage:?}, per_addr: {per_addr:?}, thread_number: {touch_thread:?}" );
+                        info!("PreallocThread done start_npage: {:?}, end_npage: {:?}, per_addr: {:?}, thread_number: {:?}",
+                              start_npage, end_npage, per_addr, touch_thread );
                     });
 
                 match handler {
                     Err(e) => error!(
-                        "Failed to create working thread for async pre-allocation, {e:?}. This may affect performance stability at the start of the workload."
+                        "Failed to create working thread for async pre-allocation, {:?}. This may affect performance stability at the start of the workload.",
+                        e
                     ),
                     Ok(hdl) => self.prealloc_handlers.push(hdl),
                 }
@@ -671,7 +669,7 @@ impl AddressSpaceMgr {
         }
         while let Some(handlers) = self.prealloc_handlers.pop() {
             if let Err(e) = handlers.join() {
-                error!("wait_prealloc join fail {e:?}");
+                error!("wait_prealloc join fail {:?}", e);
                 return Err(AddressManagerError::JoinFail);
             }
         }

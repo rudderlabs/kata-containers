@@ -110,9 +110,6 @@ pub struct SecretVolumeSource {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub items: Option<Vec<KeyToPath>>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    optional: Option<bool>,
     // TODO: additional fields.
 }
 

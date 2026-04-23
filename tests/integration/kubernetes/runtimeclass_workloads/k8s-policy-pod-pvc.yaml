@@ -8,6 +8,7 @@ kind: Pod
 metadata:
   name: policy-pod-pvc
 spec:
+  terminationGracePeriodSeconds: 0
   runtimeClassName: kata
   containers:
     - name: busybox

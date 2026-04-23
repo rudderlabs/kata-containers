@@ -188,14 +188,15 @@ and compare them with standard tools (e.g. `diff(1)`).
 # Spelling
 
 Since this project uses a number of terms not found in conventional
-dictionaries, we have a [kata-dictionary](../tests/spellcheck/kata-dictionary.txt)
-that contains some project specific terms we use.
+dictionaries, we have a
+[spell checking tool](https://github.com/kata-containers/kata-containers/tree/main/tests/cmd/check-spelling)
+that checks both dictionary words and the additional terms we use.
 
-You can run the `cspell` checking tool on your document before raising a PR to ensure it
+Run the spell checking tool on your document before raising a PR to ensure it
 is free of mistakes.
 
 If your document introduces new terms, you need to update the custom
-dictionary to incorporate the new words.
+dictionary used by the spell checking tool to incorporate the new words.
 
 # Names
 

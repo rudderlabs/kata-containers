@@ -172,11 +172,7 @@ pub async fn add_storages(
 
     for storage in storages {
         let path = storage.mount_point.clone();
-        let state = sandbox
-            .lock()
-            .await
-            .add_sandbox_storage(&path, storage.shared)
-            .await;
+        let state = sandbox.lock().await.add_sandbox_storage(&path).await;
         if state.ref_count().await > 1 {
             if let Some(path) = state.path() {
                 if !path.is_empty() {
@@ -471,7 +467,7 @@ mod tests {
         ];
 
         for (i, d) in tests.iter().enumerate() {
-            let msg = format!("test[{i}]: {d:?}");
+            let msg = format!("test[{}]: {:?}", i, d);
 
             skip_loop_by_user!(msg, d.test_user);
 
@@ -519,7 +515,7 @@ mod tests {
                 nix::mount::umount(&mount_point).unwrap();
             }
 
-            let msg = format!("{msg}: result: {result:?}");
+            let msg = format!("{}: result: {:?}", msg, result);
             if d.error_contains.is_empty() {
                 assert!(result.is_ok(), "{}", msg);
             } else {
@@ -580,7 +576,7 @@ mod tests {
         let tempdir = tempdir().expect("failed to create tmpdir");
 
         for (i, d) in tests.iter().enumerate() {
-            let msg = format!("test[{i}]: {d:?}");
+            let msg = format!("test[{}]: {:?}", i, d);
 
             let mount_dir = tempdir.path().join(d.mount_path);
             fs::create_dir(&mount_dir)
@@ -667,7 +663,7 @@ mod tests {
         let tempdir = tempdir().expect("failed to create tmpdir");
 
         for (i, d) in tests.iter().enumerate() {
-            let msg = format!("test[{i}]: {d:?}");
+            let msg = format!("test[{}]: {:?}", i, d);
 
             let mount_dir = tempdir.path().join(d.path);
             fs::create_dir(&mount_dir)
@@ -678,12 +674,12 @@ mod tests {
 
             // create testing directories and files
             for n in 1..COUNT {
-                let nest_dir = mount_dir.join(format!("nested{n}"));
+                let nest_dir = mount_dir.join(format!("nested{}", n));
                 fs::create_dir(&nest_dir)
                     .unwrap_or_else(|_| panic!("{}: failed to create nest directory", msg));
 
                 for f in 1..COUNT {
-                    let filename = nest_dir.join(format!("file{f}"));
+                    let filename = nest_dir.join(format!("file{}", f));
                     File::create(&filename)
                         .unwrap_or_else(|_| panic!("{}: failed to create file", msg));
                     file_mode = filename.as_path().metadata().unwrap().permissions().mode();
@@ -711,9 +707,9 @@ mod tests {
             );
 
             for n in 1..COUNT {
-                let nest_dir = mount_dir.join(format!("nested{n}"));
+                let nest_dir = mount_dir.join(format!("nested{}", n));
                 for f in 1..COUNT {
-                    let filename = nest_dir.join(format!("file{f}"));
+                    let filename = nest_dir.join(format!("file{}", f));
                     let file = Path::new(&filename);
 
                     assert_eq!(file.metadata().unwrap().gid(), d.gid);

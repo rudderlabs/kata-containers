@@ -28,6 +28,7 @@ readonly default_kernel_config_dir="${script_dir}/configs"
 # Default path to search for kernel config fragments
 readonly default_config_frags_dir="${script_dir}/configs/fragments"
 readonly default_config_whitelist="${script_dir}/configs/fragments/whitelist.conf"
+readonly default_initramfs="${script_dir}/initramfs.cpio.gz"
 # xPU vendor
 readonly VENDOR_INTEL="intel"
 readonly VENDOR_NVIDIA="nvidia"
@@ -64,8 +65,6 @@ PREFIX="${PREFIX:-/usr}"
 kernel_url=""
 #Linux headers for GPU guest fs module building
 linux_headers=""
-# Kernel Reference to download using git
-kernel_ref=""
 # Enable measurement of the guest rootfs at boot.
 measured_rootfs="false"
 
@@ -110,7 +109,6 @@ Options:
 	-m              : Enable measured rootfs.
 	-k <path>   	: Path to kernel to build.
 	-p <path>   	: Path to a directory with patches to apply to kernel.
-	-r <ref>        : Enable git mode to download kernel using ref.
 	-s          	: Skip .config checks
 	-t <hypervisor>	: Hypervisor_target.
 	-u <url>	: Kernel URL to be used to download the kernel tarball.
@@ -134,24 +132,10 @@ arch_to_kernel() {
 	esac
 }
 
-get_git_kernel() {
-	local kernel_path="${2:-}"
-
-	if [ ! -d "${kernel_path}" ] ; then
-		mkdir -p "${kernel_path}"
-		pushd "${kernel_path}"
-		local kernel_git_url="https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git"
-		if [ -n "${kernel_url}" ]; then
-			kernel_git_url="${kernel_url}"
-		fi
-		git init
-		git remote add origin "${kernel_git_url}"
-		popd
-	fi
-	pushd "${kernel_path}"
-	git fetch --depth 1 origin "${kernel_ref}"
-	git checkout "${kernel_ref}"
-	popd
+# When building for measured rootfs the initramfs image should be previously built.
+check_initramfs_or_die() {
+	[ -f "${default_initramfs}" ] || \
+		die "Initramfs for measured rootfs not found at ${default_initramfs}"
 }
 
 get_kernel() {
@@ -192,7 +176,7 @@ get_kernel() {
 	fi
 
 	if [ -f "${kernel_tarball}" ]; then
-		if [ -z "${rc}" ] && ! sha256sum -c "${kernel_tarball}.sha256"; then
+	       	if [ -n "${rc}" ] && ! sha256sum -c "${kernel_tarball}.sha256"; then
 			info "invalid kernel tarball ${kernel_tarball} removing "
 			rm -f "${kernel_tarball}"
 		fi
@@ -282,9 +266,17 @@ get_kernel_frag_path() {
 
 	if [[ "${gpu_vendor}" != "" ]];then
 		info "Add kernel config for GPU due to '-g ${gpu_vendor}'"
+		# If conf_guest is set we need to update the CONFIG_LOCALVERSION
+		# to match the suffix created in install_kata
+		# -nvidia-gpu-confidential, the linux headers will be named the very
+		# same if build with make deb-pkg for TDX or SNP.
 		local gpu_configs=$(mktemp).conf
 		local gpu_subst_configs="${gpu_path}/${gpu_vendor}.${arch_target}.conf.in"
-		export CONF_GUEST_SUFFIX=""
+		if [[ "${conf_guest}" != "" ]];then
+			export CONF_GUEST_SUFFIX="-${conf_guest}"
+		else
+			export CONF_GUEST_SUFFIX=""
+		fi
 		envsubst <${gpu_subst_configs} >${gpu_configs}
 		unset CONF_GUEST_SUFFIX
 
@@ -297,11 +289,15 @@ get_kernel_frag_path() {
 		all_configs="${all_configs} ${dpu_configs}"
 	fi
 
-	if [[ "${measured_rootfs}" == "true" ]]; then
+	if [ "${measured_rootfs}" == "true" ]; then
 		info "Enabling config for confidential guest trust storage protection"
-		local cryptsetup_configs
-		cryptsetup_configs="$(ls "${common_path}"/confidential_containers/cryptsetup.conf)"
+		local cryptsetup_configs="$(ls ${common_path}/confidential_containers/cryptsetup.conf)"
 		all_configs="${all_configs} ${cryptsetup_configs}"
+
+		check_initramfs_or_die
+		info "Enabling config for confidential guest measured boot"
+		local initramfs_configs="$(ls ${common_path}/confidential_containers/initramfs.conf)"
+		all_configs="${all_configs} ${initramfs_configs}"
 	fi
 
 	if [[ "${conf_guest}" != "" ]];then
@@ -322,8 +318,7 @@ get_kernel_frag_path() {
 
 	if [[ ${KERNEL_DEBUG_ENABLED} == "yes" ]]; then
 		info "Enable kernel debug"
-		local debug_path="${arch_path}/../debug"
-		local debug_configs="$(ls ${debug_path}/*.conf)"
+		local debug_configs="$(ls ${common_path}/common/debug.conf)"
 		all_configs="${all_configs} ${debug_configs}"
 	fi
 
@@ -346,10 +341,6 @@ get_kernel_frag_path() {
 	results=$(grep "${not_in_string}" <<< "$results")
 	# Do not care about options that are in whitelist
 	results=$(grep -v -f ${default_config_whitelist} <<< "$results")
-	local version_config_whitelist="${default_config_whitelist%.*}-${kernel_version}.conf"
-	if [ -f ${version_config_whitelist} ]; then
-		results=$(grep -v -f ${version_config_whitelist} <<< "$results")
-	fi
 
 	[[ "${skip_config_checks}" == "true" ]] && echo "${config_path}" && return
 
@@ -450,11 +441,7 @@ setup_kernel() {
 		[ -n "$kernel_version" ] || die "failed to get kernel version: Kernel version is emtpy"
 
 		if [[ ${download_kernel} == "true" ]]; then
-			if [ -z "${kernel_ref}" ]; then
-				get_kernel "${kernel_version}" "${kernel_path}"
-			else
-				get_git_kernel "${kernel_version}" "${kernel_path}"
-			fi
+			get_kernel "${kernel_version}" "${kernel_path}"
 		fi
 
 		[ -n "$kernel_path" ] || die "failed to find kernel source path"
@@ -486,22 +473,16 @@ setup_kernel() {
 	[ -n "${hypervisor_target}" ] || hypervisor_target="kvm"
 	[ -n "${kernel_config_path}" ] || kernel_config_path=$(get_default_kernel_config "${kernel_version}" "${hypervisor_target}" "${arch_target}" "${kernel_path}")
 
+	if [ "${measured_rootfs}" == "true" ]; then
+		check_initramfs_or_die
+		info "Copying initramfs from: ${default_initramfs}"
+		cp "${default_initramfs}" ./
+	fi
+
 	info "Copying config file from: ${kernel_config_path}"
 	cp "${kernel_config_path}" ./.config
 	ARCH=${arch_target}  make oldconfig ${CROSS_BUILD_ARG}
 	)
-
-	info "Fetching NVIDIA driver source code"
-	if [[ "${gpu_vendor}" == "${VENDOR_NVIDIA}" ]]; then
-		driver_version=$(get_from_kata_deps .externals.nvidia.driver.version)
-		driver_url=$(get_from_kata_deps .externals.nvidia.driver.url)
-		driver_src="open-gpu-kernel-modules-${driver_version}"
-
-		info "Downloading NVIDIA driver source code from: ${driver_url}${driver_version}.tar.gz"
-		[[ -d "${driver_src}" ]] && rm -rf "${driver_src}"
-		curl -L -o "${driver_version}.tar.gz" "${driver_url}${driver_version}.tar.gz"
-		tar -xvf "${driver_version}.tar.gz" --transform "s|open-gpu-kernel-modules-${driver_version}|open-gpu-kernel-modules|"
-	fi
 }
 
 build_kernel() {
@@ -519,16 +500,6 @@ build_kernel() {
 	[ -e "vmlinux" ]
 	([ "${hypervisor_target}" == "firecracker" ] || [ "${hypervisor_target}" == "cloud-hypervisor" ]) && [ "${arch_target}" == "arm64" ] && [ -e "arch/${arch_target}/boot/Image" ]
 	popd >>/dev/null
-
-	if [[ "${gpu_vendor}" == "${VENDOR_NVIDIA}" ]]; then
-		# We need in-tree modules as well as out-of-tree ones for NVIDIA GPU
-		make -C "${kernel_path}" -j "$(nproc)" INSTALL_MOD_STRIP=1 INSTALL_MOD_PATH="${kernel_path}" modules_install
-
-		pushd open-gpu-kernel-modules
-		make -j "$(nproc)" CC=gcc SYSSRC="${kernel_path}" > /dev/null
-		make INSTALL_MOD_STRIP=1 INSTALL_MOD_PATH="${kernel_path}" -j "$(nproc)" CC=gcc SYSSRC="${kernel_path}" modules_install
-		make -j "$(nproc)" CC=gcc SYSSRC="${kernel_path}" clean > /dev/null
-	fi
 }
 
 build_kernel_headers() {
@@ -575,17 +546,12 @@ install_kata() {
 		suffix="-${build_type}"
 	fi
 
-	if [[ ${gpu_vendor} != "" ]]; then
-		suffix="-${gpu_vendor}-gpu${suffix}"
-	elif [[ ${conf_guest} != "" ]]; then
-		# CCA on aarch64 uses -confidential suffix; x86_64/s390x unified kernel does not
-		if [[ "${arch_target}" == "aarch64" ]]; then
-			suffix="-${conf_guest}${suffix}"
-		fi
+	if [[ ${conf_guest} != "" ]];then
+		suffix="-${conf_guest}${suffix}"
 	fi
 
-	if [[ ${KERNEL_DEBUG_ENABLED} == "yes" ]]; then
-		suffix="-debug${suffix}"
+	if [[ ${gpu_vendor} != "" ]];then
+		suffix="-${gpu_vendor}-gpu${suffix}"
 	fi
 
 	vmlinuz="vmlinuz-${kernel_version}-${config_version}${suffix}"
@@ -616,7 +582,6 @@ install_kata() {
 	fi
 
 	install --mode 0644 -D ./.config "${install_path}/config-${kernel_version}-${config_version}${suffix}"
-	install --mode 0644 -D ./System.map "${install_path}/System.map-${kernel_version}-${config_version}${suffix}"
 
 	ln -sf "${vmlinuz}" "${install_path}/vmlinuz${suffix}.container"
 	ln -sf "${vmlinux}" "${install_path}/vmlinux${suffix}.container"
@@ -626,7 +591,7 @@ install_kata() {
 }
 
 main() {
-	while getopts "a:b:c:dD:eEfg:hH:k:mp:r:st:u:v:x" opt; do
+	while getopts "a:b:c:dD:eEfg:hH:k:mp:st:u:v:x" opt; do
 		case "$opt" in
 			a)
 				arch_target="${OPTARG}"
@@ -673,9 +638,6 @@ main() {
 			p)
 				patches_path="${OPTARG}"
 				;;
-			r)
-				kernel_ref="${OPTARG}"
-				;;
 			s)
 				skip_config_checks="true"
 				;;
@@ -708,8 +670,8 @@ main() {
 		build_type="dragonball-experimental"
 		if [ -n "$kernel_version" ];  then
 			kernel_major_version=$(get_major_kernel_version "${kernel_version}")
-			if [[ ${kernel_major_version} != "6.18" ]]; then
-				info "dragonball-experimental kernel patches are only tested on 6.18.x kernel now, other kernel version may cause confliction"
+			if [[ ${kernel_major_version} != "5.10" ]]; then
+				info "dragonball-experimental kernel patches are only tested on 5.10.x kernel now, other kernel version may cause confliction"
 			fi
 		fi
 	fi

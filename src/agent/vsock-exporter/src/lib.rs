@@ -58,7 +58,7 @@ pub enum Error {
     #[error("connection error: {0}")]
     ConnectionError(String),
     #[error("serialisation error: {0}")]
-    SerialisationError(#[from] serde_json::Error),
+    SerialisationError(#[from] bincode::Error),
     #[error("I/O error: {0}")]
     IOError(#[from] std::io::Error),
 }
@@ -70,7 +70,7 @@ impl ExportError for Error {
 }
 
 fn make_io_error(desc: String) -> std::io::Error {
-    std::io::Error::other(desc)
+    std::io::Error::new(ErrorKind::Other, desc)
 }
 
 // Send a trace span to the forwarder running on the host.
@@ -81,7 +81,8 @@ async fn write_span(
     let mut writer = writer.lock().await;
 
     let encoded_payload: Vec<u8> =
-        serde_json::to_vec(span).map_err(|e| make_io_error(e.to_string()))?;
+        bincode::serialize(&span).map_err(|e| make_io_error(e.to_string()))?;
+
     let payload_len: u64 = encoded_payload.len() as u64;
 
     let mut payload_len_as_bytes: [u8; HEADER_SIZE_BYTES as usize] =

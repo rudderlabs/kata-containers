@@ -17,10 +17,10 @@ spec:
       labels:
         app: nginx
     spec:
+      terminationGracePeriodSeconds: 0
       runtimeClassName: kata
       containers:
       - name: nginx
-        image: ${NGINX_IMAGE}
-        imagePullPolicy: Always
+        image: quay.io/fidencio/${nginx_version}
         ports:
         - containerPort: 80

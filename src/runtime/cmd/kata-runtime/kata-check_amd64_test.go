@@ -55,17 +55,18 @@ func TestCCCheckCLIFunction(t *testing.T) {
 	var moduleData []testModuleData
 
 	cpuType = getCPUtype()
-	moduleData = []testModuleData{}
-
-	switch cpuType {
-	case cpuTypeIntel:
+	if cpuType == cpuTypeIntel {
 		cpuData = []testCPUData{
 			{archGenuineIntel, "lm vmx sse4_1", false},
 		}
-	case cpuTypeAMD:
+
+		moduleData = []testModuleData{}
+	} else if cpuType == cpuTypeAMD {
 		cpuData = []testCPUData{
 			{archAuthenticAMD, "lm svm sse4_1", false},
 		}
+
+		moduleData = []testModuleData{}
 	}
 
 	genericCheckCLIFunction(t, cpuData, moduleData)
@@ -275,8 +276,7 @@ func TestCheckHostIsVMContainerCapable(t *testing.T) {
 	var moduleData []testModuleData
 	cpuType = getCPUtype()
 
-	switch cpuType {
-	case cpuTypeIntel:
+	if cpuType == cpuTypeIntel {
 		cpuData = []testCPUData{
 			{"", "", true},
 			{"Intel", "", true},
@@ -292,7 +292,7 @@ func TestCheckHostIsVMContainerCapable(t *testing.T) {
 			{filepath.Join(sysModuleDir, "kvm_intel/parameters/nested"), "Y", false},
 			{filepath.Join(sysModuleDir, "kvm_intel/parameters/unrestricted_guest"), "Y", false},
 		}
-	case cpuTypeAMD:
+	} else if cpuType == cpuTypeAMD {
 		cpuData = []testCPUData{
 			{"", "", true},
 			{"AMD", "", true},
@@ -340,7 +340,7 @@ func TestCheckHostIsVMContainerCapable(t *testing.T) {
 		// Write the following into the denylist file
 		// blacklist <mod>
 		// install <mod> /bin/false
-		_, err = fmt.Fprintf(denylistFile, "blacklist %s\ninstall %s /bin/false\n", mod, mod)
+		_, err = denylistFile.WriteString(fmt.Sprintf("blacklist %s\ninstall %s /bin/false\n", mod, mod))
 		assert.Nil(err)
 	}
 	denylistFile.Close()
@@ -348,15 +348,6 @@ func TestCheckHostIsVMContainerCapable(t *testing.T) {
 
 	defer func() {
 		os.Remove(denylistModuleConf)
-		// reload removed modules
-		for mod := range archRequiredKernelModules {
-			cmd := exec.Command(modProbeCmd, mod)
-			if output, err := cmd.CombinedOutput(); err == nil {
-				kataLog.WithField("output", string(output)).Info("module loaded")
-			} else {
-				kataLog.WithField("output", string(output)).Warn("failed to load module")
-			}
-		}
 	}()
 
 	// remove the modules to force a failure
@@ -505,10 +496,9 @@ func TestSetCPUtype(t *testing.T) {
 	assert.NotEmpty(archRequiredKernelModules)
 
 	cpuType = getCPUtype()
-	switch cpuType {
-	case cpuTypeIntel:
+	if cpuType == cpuTypeIntel {
 		assert.Equal(archRequiredCPUFlags["vmx"], "Virtualization support")
-	case cpuTypeAMD:
+	} else if cpuType == cpuTypeAMD {
 		assert.Equal(archRequiredCPUFlags["svm"], "Virtualization support")
 	}
 

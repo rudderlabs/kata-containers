@@ -14,6 +14,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	goruntime "runtime"
 	"strings"
 	"testing"
 
@@ -183,7 +184,7 @@ func genericGetExpectedHostDetails(tmpdir string, expectedVendor string, expecte
 	}
 
 	const expectedKernelVersion = "99.1"
-	const expectedArch = runtime.GOARCH
+	const expectedArch = goruntime.GOARCH
 
 	expectedDistro := DistroInfo{
 		Name:    "Foo",
@@ -253,7 +254,7 @@ VERSION_ID="%s"
 		}
 	}
 
-	if runtime.GOARCH == "arm64" {
+	if goruntime.GOARCH == "arm64" {
 		expectedHostDetails.CPU.Vendor = "ARM Limited"
 		expectedHostDetails.CPU.Model = "v8"
 	}

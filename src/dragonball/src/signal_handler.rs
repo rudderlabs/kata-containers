@@ -53,7 +53,10 @@ extern "C" fn sigsys_handler(num: c_int, info: *mut siginfo_t, _unused: *mut c_v
     // SIGSYS is triggered when bad syscalls are detected. num_faults is only added when SIGSYS is detected
     // so it actually only collects the count for bad syscalls.
     METRICS.read().unwrap().seccomp.num_faults.inc();
-    error!("Shutting down VM after intercepting a bad syscall ({syscall}).");
+    error!(
+        "Shutting down VM after intercepting a bad syscall ({}).",
+        syscall
+    );
 
     // Safe because we're terminating the process anyway. We don't actually do anything when
     // running unit tests.
@@ -85,7 +88,10 @@ extern "C" fn sigbus_sigsegv_handler(num: c_int, info: *mut siginfo_t, _unused: 
         _ => (),
     }
 
-    error!("Shutting down VM after intercepting signal {si_signo}, code {si_code}.");
+    error!(
+        "Shutting down VM after intercepting signal {}, code {}.",
+        si_signo, si_code
+    );
 
     // Safe because we're terminating the process anyway. We don't actually do anything when
     // running unit tests.
@@ -120,7 +126,7 @@ mod tests {
 
     use libc::{cpu_set_t, syscall};
     use std::convert::TryInto;
-    use std::{mem, thread};
+    use std::{mem, process, thread};
 
     use seccompiler::{apply_filter, BpfProgram, SeccompAction, SeccompFilter};
 
@@ -157,16 +163,6 @@ mod tests {
         let child = thread::spawn(move || {
             assert!(register_signal_handlers().is_ok());
 
-            // Trigger SIGBUS/SIGSEGV *before* installing the seccomp filter.
-            // Call SIGBUS signal handler.
-            assert_eq!(METRICS.read().unwrap().signals.sigbus.count(), 0);
-            unsafe { libc::raise(SIGBUS) };
-
-            // Call SIGSEGV signal handler.
-            assert_eq!(METRICS.read().unwrap().signals.sigsegv.count(), 0);
-            unsafe { libc::raise(SIGSEGV) };
-
-            // Install a seccomp filter that traps a known syscall so that we can verify SIGSYS handling.
             let filter = SeccompFilter::new(
                 vec![(libc::SYS_mkdirat, vec![])].into_iter().collect(),
                 SeccompAction::Allow,
@@ -178,8 +174,20 @@ mod tests {
             assert!(apply_filter(&TryInto::<BpfProgram>::try_into(filter).unwrap()).is_ok());
             assert_eq!(METRICS.read().unwrap().seccomp.num_faults.count(), 0);
 
-            // Invoke the blacklisted syscall to trigger SIGSYS and exercise the SIGSYS handler.
+            // Call the blacklisted `SYS_mkdirat`.
             unsafe { syscall(libc::SYS_mkdirat, "/foo/bar\0") };
+
+            // Call SIGBUS signal handler.
+            assert_eq!(METRICS.read().unwrap().signals.sigbus.count(), 0);
+            unsafe {
+                syscall(libc::SYS_kill, process::id(), SIGBUS);
+            }
+
+            // Call SIGSEGV signal handler.
+            assert_eq!(METRICS.read().unwrap().signals.sigsegv.count(), 0);
+            unsafe {
+                syscall(libc::SYS_kill, process::id(), SIGSEGV);
+            }
         });
         assert!(child.join().is_ok());
 

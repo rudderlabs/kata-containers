@@ -1,40 +1,36 @@
 [
   {
-    "allowed": true,
     "description": "no pidns",
-    "kind": "CreateSandboxRequest",
+    "allowed": true,
     "request": {
+      "type": "CreateSandbox",
       "sandbox_pidns": false
     }
   },
   {
-    "allowed": false,
     "description": "pidns",
-    "kind": "CreateSandboxRequest",
+    "allowed": false,
     "request": {
+      "type": "CreateSandbox",
       "sandbox_pidns": true
     }
   },
   {
-    "allowed": false,
     "description": "kernel modules",
-    "kind": "CreateSandboxRequest",
+    "allowed": false,
     "request": {
-      "kernel_modules": [
-        {
-          "name": "evil.ko"
-        }
-      ],
-      "sandbox_pidns": false
+      "type": "CreateSandbox",
+      "sandbox_pidns": false,
+      "kernel_modules": [{"name": "evil.ko"}]
     }
   },
   {
-    "allowed": false,
     "description": "guest hooks",
-    "kind": "CreateSandboxRequest",
+    "allowed": false,
     "request": {
-      "guest_hook_path": "/attacker/controlled/path",
-      "sandbox_pidns": false
+      "type": "CreateSandbox",
+      "sandbox_pidns": false,
+      "guest_hook_path": "/attacker/controlled/path"
     }
   }
 ]

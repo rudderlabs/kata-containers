@@ -68,7 +68,7 @@ func (r *HexByteReader) Read(p []byte) (n int, err error) {
 
 		// perform the conversion
 		s := string(bytes)
-		result := strings.ReplaceAll(s, `\x`, `\\x`)
+		result := strings.Replace(s, `\x`, `\\x`, -1)
 
 		// store the data
 		r.data = []byte(result)

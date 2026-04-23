@@ -602,11 +602,9 @@ struct TopologySpreadConstraint {
 }
 
 impl Container {
-    pub async fn init(&mut self, config: &Config, is_pause_container: bool) {
+    pub async fn init(&mut self, config: &Config) {
         // Load container image properties from the registry.
-        self.registry = registry::get_container(config, &self.image, is_pause_container)
-            .await
-            .unwrap();
+        self.registry = registry::get_container(config, &self.image).await.unwrap();
     }
 
     pub fn get_env_variables(
@@ -859,7 +857,11 @@ impl yaml::K8sResource for Pod {
     }
 
     fn get_sandbox_name(&self) -> Option<String> {
-        yaml::name_regex_from_meta(&self.metadata)
+        let name = self.metadata.get_name();
+        if !name.is_empty() {
+            return Some(name);
+        }
+        panic!("No pod name.");
     }
 
     fn get_namespace(&self) -> Option<String> {
@@ -878,12 +880,12 @@ impl yaml::K8sResource for Pod {
             storages,
             container,
             settings,
-            &self.spec,
+            &self.spec.volumes,
         );
     }
 
-    fn generate_initdata_anno(&self, agent_policy: &policy::AgentPolicy) -> String {
-        agent_policy.generate_initdata_anno(self)
+    fn generate_policy(&self, agent_policy: &policy::AgentPolicy) -> String {
+        agent_policy.generate_policy(self)
     }
 
     fn serialize(&mut self, policy: &str) -> String {
@@ -920,26 +922,12 @@ impl yaml::K8sResource for Pod {
             .or_else(|| Some(String::new()))
     }
 
-    fn get_process_fields(
-        &self,
-        process: &mut policy::KataProcess,
-        must_check_passwd: &mut bool,
-        is_pause_container: bool,
-    ) {
-        yaml::get_process_fields(
-            process,
-            must_check_passwd,
-            is_pause_container,
-            &self.spec.securityContext,
-        );
+    fn get_process_fields(&self, process: &mut policy::KataProcess, must_check_passwd: &mut bool) {
+        yaml::get_process_fields(process, &self.spec.securityContext, must_check_passwd);
     }
 
     fn get_sysctls(&self) -> Vec<Sysctl> {
         yaml::get_sysctls(&self.spec.securityContext)
-    }
-
-    fn get_pod_security_context(&self) -> Option<&PodSecurityContext> {
-        self.spec.securityContext.as_ref()
     }
 }
 
@@ -990,19 +978,9 @@ impl Container {
     }
 
     pub fn get_process_fields(&self, process: &mut policy::KataProcess) {
-        debug!(
-            "get_process_fields: container image = {:?}",
-            self.registry.image
-        );
-
         if let Some(context) = &self.securityContext {
-            debug!("get_process_fields: securityContext = {:?}", context);
-
             if let Some(uid) = context.runAsUser {
-                debug!("get_process_fields: runAsUser uid = {uid}");
-
-                let new_uid = uid.try_into().unwrap();
-                process.User.UID = new_uid;
+                process.User.UID = uid.try_into().unwrap();
                 // Changing the UID can break the GID mapping
                 // if a /etc/passwd file is present.
                 // The proper GID is determined, in order of preference:
@@ -1012,37 +990,14 @@ impl Container {
                 //
                 // This behavior comes from the containerd runtime implementation:
                 // WithUser https://github.com/containerd/containerd/blob/main/pkg/oci/spec_opts.go#L592
-                let new_gid = match self.registry.get_gid_from_passwd_uid(new_uid) {
-                    Ok(gid) => gid,
-                    Err(e) => {
-                        debug!("get_process_fields: no GID for UID = {new_uid} in container image, error {e}");
-                        process.User.GID
-                    }
-                };
-                process.User.GID = new_gid;
-                debug!(
-                    "get_process_fields: set GID = {new_gid}, User = {:?}",
-                    &process.User
-                );
-
-                process.User.AdditionalGids.insert(new_gid);
-                debug!(
-                    "get_process_fields: inserted GID = {new_gid} into AdditionalGids, User = {:?}",
-                    &process.User
-                );
+                process.User.GID = self
+                    .registry
+                    .get_gid_from_passwd_uid(process.User.UID)
+                    .unwrap_or(process.User.GID);
             }
 
             if let Some(gid) = context.runAsGroup {
-                debug!("get_process_fields: runAsGroup = {:?}", gid);
-
-                let new_gid = gid.try_into().unwrap();
-                process.User.GID = new_gid;
-
-                process.User.AdditionalGids.insert(new_gid);
-                debug!(
-                    "get_process_fields: inserted GID = {new_gid} into AdditionalGids, User = {:?}",
-                    &process.User
-                );
+                process.User.GID = gid.try_into().unwrap();
             }
 
             if let Some(allow) = context.allowPrivilegeEscalation {
@@ -1056,18 +1011,8 @@ impl Container {
             .get_additional_groups_from_uid(process.User.UID)
             .unwrap_or_default()
         {
-            debug!(
-                "get_process_fields: adding additional group = {gid} for UID = {}",
-                process.User.UID
-            );
             process.User.AdditionalGids.insert(gid);
         }
-    }
-
-    // Count NVIDIA passthrough GPU requests using an explicit allowlist of resource keys.
-    pub fn get_nvidia_pgpu_count(&self, pgpu_resource_keys: &[String]) -> Option<usize> {
-        let limits = self.resources.as_ref()?.limits.as_ref()?;
-        sum_limits_by_keys(limits, pgpu_resource_keys)
     }
 }
 
@@ -1115,90 +1060,7 @@ pub async fn add_pause_container(containers: &mut Vec<Container>, config: &Confi
         }),
         ..Default::default()
     };
-    let is_pause_container = true;
-    pause_container.init(config, is_pause_container).await;
+    pause_container.init(config).await;
     containers.insert(0, pause_container);
     debug!("pause container added.");
-}
-
-fn sum_limits_by_keys(limits: &BTreeMap<String, String>, keys: &[String]) -> Option<usize> {
-    if keys.is_empty() {
-        return None;
-    }
-
-    let mut total: usize = 0;
-    let mut matched_any = false;
-
-    for key in keys {
-        if let Some(v) = limits.get(key) {
-            matched_any = true;
-            let n = v.parse::<usize>().ok()?;
-            total = total.saturating_add(n);
-        }
-    }
-
-    // Preserve historical semantics:
-    // - if at least one key matched and all matched values parsed, return Some(total)
-    // - if no key matched, return None
-    matched_any.then_some(total)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn make_limits(entries: &[(&str, &str)]) -> BTreeMap<String, String> {
-        entries
-            .iter()
-            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-            .collect()
-    }
-
-    #[test]
-    fn sum_limits_none_when_keys_empty() {
-        let limits = make_limits(&[("nvidia.com/pgpu", "2")]);
-        assert_eq!(sum_limits_by_keys(&limits, &[]), None);
-    }
-
-    #[test]
-    fn sum_limits_none_when_no_match() {
-        let limits = make_limits(&[("nvidia.com/pgpu", "2")]);
-        let keys = vec!["vendor.com/gpu".to_string()];
-        assert_eq!(sum_limits_by_keys(&limits, &keys), None);
-    }
-
-    #[test]
-    fn sum_limits_sums_matching_keys() {
-        let limits = make_limits(&[("nvidia.com/pgpu", "2"), ("nvidia.com/gpu_model", "1")]);
-        let keys = vec![
-            "nvidia.com/pgpu".to_string(),
-            "nvidia.com/gpu_model".to_string(),
-        ];
-        assert_eq!(sum_limits_by_keys(&limits, &keys), Some(3));
-    }
-
-    #[test]
-    fn sum_limits_none_on_parse_failure() {
-        let limits = make_limits(&[("nvidia.com/pgpu", "two")]);
-        let keys = vec!["nvidia.com/pgpu".to_string()];
-        assert_eq!(sum_limits_by_keys(&limits, &keys), None);
-    }
-
-    #[test]
-    fn get_nvidia_pgpu_count_uses_allowlist_keys() {
-        let limits = make_limits(&[("nvidia.com/pgpu", "1"), ("nvidia.com/GH100", "2")]);
-        let keys = vec![
-            "nvidia.com/pgpu".to_string(),
-            "nvidia.com/GH100".to_string(),
-        ];
-        let c = Container {
-            resources: Some(ResourceRequirements {
-                requests: None,
-                limits: Some(limits),
-            }),
-            ..Default::default()
-        };
-
-        assert_eq!(c.get_nvidia_pgpu_count(&keys), Some(3));
-    }
 }

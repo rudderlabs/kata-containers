@@ -27,7 +27,6 @@ const (
 	KataContainersDirectVolumeType = "katacontainers.direct.volume/volumetype"
 	KataContainersDirectFsType     = "katacontainers.direct.volume/fstype"
 	DirectVolumeTypeName           = "directvol"
-	SpdkVolumeTypeName             = "spdkvol"
 	IsDirectVolume                 = "is_directvolume"
 )
 
@@ -46,11 +45,6 @@ const (
 	GiB100 int64 = GiB * 100
 	TiB    int64 = GiB * 1024
 	TiB100 int64 = TiB * 100
-)
-
-var (
-	SpdkRawDiskDir string
-	SpdkVhostDir   string
 )
 
 func AddDirectVolume(targetPath string, mountInfo MountInfo) error {
@@ -79,7 +73,7 @@ func MkPathIfNotExit(path string) (*string, error) {
 		return nil, errors.New("stat path failed")
 	} else if !exist {
 		if err := os.MkdirAll(path, PERM); err != nil {
-			return nil, errors.New("mkdir all failed")
+			return nil, errors.New("mkdir all failed.")
 		}
 		klog.Infof("mkdir full path successfully")
 	}
@@ -94,7 +88,7 @@ func MakeFullPath(path string) error {
 			return errors.New("stat path failed with not exist")
 		}
 		if err := os.MkdirAll(path, PERM); err != nil {
-			return errors.New("mkdir all failed")
+			return errors.New("mkdir all failed.")
 		}
 	}
 
@@ -208,7 +202,7 @@ func CreateDirectBlockDevice(volID, capacityInBytesStr, storagePath string) (*st
 	// create raw disk
 	if _, err = diskfs.Create(devicePath, capacityInBytes, diskfs.Raw, diskfs.SectorSizeDefault); err != nil {
 		errMsg := fmt.Errorf("diskfs create disk failed: %v", err)
-		klog.Error(errMsg.Error())
+		klog.Errorf(errMsg.Error())
 
 		return nil, errMsg
 	}
