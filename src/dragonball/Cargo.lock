@@ -132,9 +132,9 @@ checksum = "14c189c53d098945499cdfa7ecc63567cf3886b3332b312a5b4585d8d3a6a610"
 
 [[package]]
 name = "bytes"
-version = "1.5.0"
+version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2bd12c1caf447e69cd4528f47f94d203fd2582878ecb9e9465484c4148a8223"
+checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
 name = "caps"
@@ -255,7 +255,7 @@ dependencies = [
 name = "dbs-acpi"
 version = "0.1.0"
 dependencies = [
- "vm-memory",
+ "vm-memory 0.16.2",
 ]
 
 [[package]]
@@ -267,8 +267,8 @@ dependencies = [
  "libc",
  "nix 0.23.2",
  "thiserror 1.0.48",
- "vm-memory",
- "vmm-sys-util",
+ "vm-memory 0.16.2",
+ "vmm-sys-util 0.15.0",
 ]
 
 [[package]]
@@ -285,10 +285,10 @@ dependencies = [
  "kvm-bindings",
  "kvm-ioctls",
  "libc",
- "memoffset",
+ "memoffset 0.6.5",
  "thiserror 1.0.48",
- "vm-memory",
- "vmm-sys-util",
+ "vm-memory 0.16.2",
+ "vmm-sys-util 0.15.0",
 ]
 
 [[package]]
@@ -304,7 +304,7 @@ dependencies = [
  "libc",
  "thiserror 1.0.48",
  "vm-fdt",
- "vm-memory",
+ "vm-memory 0.16.2",
 ]
 
 [[package]]
@@ -323,7 +323,7 @@ dependencies = [
  "kvm-bindings",
  "kvm-ioctls",
  "libc",
- "vmm-sys-util",
+ "vmm-sys-util 0.15.0",
 ]
 
 [[package]]
@@ -336,7 +336,7 @@ dependencies = [
  "log",
  "serde",
  "vm-superio",
- "vmm-sys-util",
+ "vmm-sys-util 0.15.0",
 ]
 
 [[package]]
@@ -357,7 +357,7 @@ dependencies = [
  "thiserror 1.0.48",
  "vfio-bindings",
  "vfio-ioctls",
- "vm-memory",
+ "vm-memory 0.16.2",
 ]
 
 [[package]]
@@ -367,7 +367,7 @@ dependencies = [
  "kvm-bindings",
  "serde_json",
  "thiserror 1.0.48",
- "vmm-sys-util",
+ "vmm-sys-util 0.15.0",
 ]
 
 [[package]]
@@ -394,7 +394,7 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.48",
  "timerfd",
- "vmm-sys-util",
+ "vmm-sys-util 0.15.0",
 ]
 
 [[package]]
@@ -429,15 +429,15 @@ dependencies = [
  "vhost",
  "virtio-bindings",
  "virtio-queue",
- "vm-memory",
- "vmm-sys-util",
+ "vm-memory 0.16.2",
+ "vmm-sys-util 0.15.0",
 ]
 
 [[package]]
 name = "deranged"
-version = "0.3.11"
+version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b42b6fa04a440b495c8b04d0e71b707c585f83cb9cb28cf8cd0d976c315e31b4"
+checksum = "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c"
 dependencies = [
  "powerfmt",
 ]
@@ -541,8 +541,8 @@ dependencies = [
  "vfio-bindings",
  "vfio-ioctls",
  "virtio-queue",
- "vm-memory",
- "vmm-sys-util",
+ "vm-memory 0.16.2",
+ "vmm-sys-util 0.15.0",
 ]
 
 [[package]]
@@ -598,7 +598,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "377fa591135fbe23396a18e2655a6d5481bf7c5823cdfa3cc81b01a229cbe640"
 dependencies = [
  "libc",
- "vmm-sys-util",
+ "vmm-sys-util 0.15.0",
 ]
 
 [[package]]
@@ -676,8 +676,8 @@ dependencies = [
  "mio 0.8.11",
  "nix 0.24.3",
  "virtio-queue",
- "vm-memory",
- "vmm-sys-util",
+ "vm-memory 0.10.0",
+ "vmm-sys-util 0.11.2",
 ]
 
 [[package]]
@@ -1002,18 +1002,18 @@ version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "efe70e65a5b092161d17f5005b66e5eefe7a94a70c332e755036fc4af78c4e79"
 dependencies = [
- "vmm-sys-util",
+ "vmm-sys-util 0.11.2",
 ]
 
 [[package]]
 name = "kvm-ioctls"
-version = "0.12.0"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3a321cabd827642499c77e27314f388dd83a717a5ca716b86476fb947f73ae4"
+checksum = "9bdde2b46ee7b6587ef79f751019c4726c4f2d3e4628df5d69f3f9c5cb6c6bd4"
 dependencies = [
  "kvm-bindings",
  "libc",
- "vmm-sys-util",
+ "vmm-sys-util 0.11.2",
 ]
 
 [[package]]
@@ -1047,7 +1047,7 @@ version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9259ddbfbb52cc918f6bbc60390004ddd0228cf1d85f402009ff2b3d95de83f"
 dependencies = [
- "vm-memory",
+ "vm-memory 0.10.0",
 ]
 
 [[package]]
@@ -1109,6 +1109,15 @@ name = "memoffset"
 version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5aa361d4faea93603064a027415f07bd8e1d5c88c9fbf68bf56a285428fd79ce"
+dependencies = [
+ "autocfg",
+]
+
+[[package]]
+name = "memoffset"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5de893c32cde5f383baa4c04c5d6dbdd735cfd4a794b0debdb2bb1b421da5ff4"
 dependencies = [
  "autocfg",
 ]
@@ -1179,7 +1188,7 @@ dependencies = [
  "cc",
  "cfg-if",
  "libc",
- "memoffset",
+ "memoffset 0.6.5",
 ]
 
 [[package]]
@@ -1191,14 +1200,27 @@ dependencies = [
  "bitflags 1.3.2",
  "cfg-if",
  "libc",
- "memoffset",
+ "memoffset 0.6.5",
+]
+
+[[package]]
+name = "nix"
+version = "0.26.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "598beaf3cc6fdd9a5dfb1630c2800c7acd31df7aaf0f565796fba2b53ca1af1b"
+dependencies = [
+ "bitflags 1.3.2",
+ "cfg-if",
+ "libc",
+ "memoffset 0.7.1",
+ "pin-utils",
 ]
 
 [[package]]
 name = "num-conv"
-version = "0.1.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51d515d32fb182ee37cda2ccdcb92950d6a3c2893aa280e540671c2cd0f3b1d9"
+checksum = "c6673768db2d862beb9b39a78fdcb1a69439615d5794a1be50caa9bc92c81967"
 
 [[package]]
 name = "num-traits"
@@ -1251,7 +1273,7 @@ dependencies = [
  "nydus-utils",
  "serde",
  "serde_json",
- "vm-memory",
+ "vm-memory 0.10.0",
 ]
 
 [[package]]
@@ -1280,7 +1302,7 @@ dependencies = [
  "tar",
  "tokio",
  "url",
- "vm-memory",
+ "vm-memory 0.10.0",
 ]
 
 [[package]]
@@ -1325,9 +1347,9 @@ checksum = "dd8b5dd2ae5ed71462c540258bedcb51965123ad7e7ccf4b9a8cafaa4a63576d"
 
 [[package]]
 name = "openssl"
-version = "0.10.72"
+version = "0.10.78"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fedfea7d58a1f73118430a55da6a286e7b044961736ce96a16a17068ea25e5da"
+checksum = "f38c4372413cdaaf3cc79dd92d29d7d9f5ab09b51b10dded508fb90bb70b9222"
 dependencies = [
  "bitflags 2.4.0",
  "cfg-if",
@@ -1366,9 +1388,9 @@ dependencies = [
 
 [[package]]
 name = "openssl-sys"
-version = "0.9.108"
+version = "0.9.114"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e145e1651e858e820e4860f7b9c5e169bc1d8ce1c86043be79fa7b7634821847"
+checksum = "13ce1245cd07fcc4cfdb438f7507b0c7e4f3849a69fd84d52374c66d83741bb6"
 dependencies = [
  "cc",
  "libc",
@@ -1706,18 +1728,28 @@ dependencies = [
 
 [[package]]
 name = "serde"
-version = "1.0.188"
+version = "1.0.228"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf9e0fcba69a370eed61bcf2b728575f726b50b55cba78064753d708ddc7549e"
+checksum = "9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e"
+dependencies = [
+ "serde_core",
+ "serde_derive",
+]
+
+[[package]]
+name = "serde_core"
+version = "1.0.228"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "41d385c7d4ca58e59fc732af25c3983b67ac852c1a25000afe1175de458b67ad"
 dependencies = [
  "serde_derive",
 ]
 
 [[package]]
 name = "serde_derive"
-version = "1.0.188"
+version = "1.0.228"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4eca7ac642d82aa35b60049a6eccb4be6be75e599bd2e9adb5f875a737654af2"
+checksum = "d540f220d3187173da220f885ab66608367b6574e925011a9353e4badda91d79"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1777,12 +1809,9 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
 name = "slab"
-version = "0.4.9"
+version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f92a496fb766b417c996b9c5e57daf2f7ad3b0bebe1ccfca4856390e3d3bb67"
-dependencies = [
- "autocfg",
-]
+checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "slog"
@@ -1915,7 +1944,7 @@ dependencies = [
 name = "test-utils"
 version = "0.1.0"
 dependencies = [
- "nix 0.24.3",
+ "nix 0.26.4",
 ]
 
 [[package]]
@@ -1979,30 +2008,30 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.3.37"
+version = "0.3.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35e7868883861bd0e56d9ac6efcaaca0d6d5d82a2a7ec8209ff492c07cf37b21"
+checksum = "743bd48c283afc0388f9b8827b976905fb217ad9e647fae3a379a9283c4def2c"
 dependencies = [
  "deranged",
  "itoa",
  "num-conv",
  "powerfmt",
- "serde",
+ "serde_core",
  "time-core",
  "time-macros",
 ]
 
 [[package]]
 name = "time-core"
-version = "0.1.2"
+version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef927ca75afb808a4d64dd374f00a2adf8d0fcff8e7b184af886c3c87ec4a3f3"
+checksum = "7694e1cfe791f8d31026952abf09c69ca6f6fa4e1a1229e18988f06a04a12dca"
 
 [[package]]
 name = "time-macros"
-version = "0.2.19"
+version = "0.2.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2834e6017e3e5e4b9834939793b282bc03b37a3336245fa820e35e233e2a85de"
+checksum = "2e70e4c5a0e0a8a4823ad65dfe1a6930e4f4d756dcd9dd7939022b5e8c501215"
 dependencies = [
  "num-conv",
  "time-core",
@@ -2202,10 +2231,10 @@ dependencies = [
  "kvm-ioctls",
  "libc",
  "log",
- "thiserror 1.0.48",
+ "thiserror 2.0.12",
  "vfio-bindings",
- "vm-memory",
- "vmm-sys-util",
+ "vm-memory 0.16.2",
+ "vmm-sys-util 0.15.0",
 ]
 
 [[package]]
@@ -2216,8 +2245,8 @@ checksum = "a6769e8dbf5276b4376439fbf36bb880d203bf614bf7ef444198edc24b5a9f35"
 dependencies = [
  "bitflags 1.3.2",
  "libc",
- "vm-memory",
- "vmm-sys-util",
+ "vm-memory 0.10.0",
+ "vmm-sys-util 0.11.2",
 ]
 
 [[package]]
@@ -2234,8 +2263,8 @@ checksum = "3ba81e2bcc21c0d2fc5e6683e79367e26ad219197423a498df801d79d5ba77bd"
 dependencies = [
  "log",
  "virtio-bindings",
- "vm-memory",
- "vmm-sys-util",
+ "vm-memory 0.10.0",
+ "vmm-sys-util 0.11.2",
 ]
 
 [[package]]
@@ -2250,8 +2279,19 @@ version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "688a70366615b45575a424d9c665561c1b5ab2224d494f706b6a6812911a827c"
 dependencies = [
+ "libc",
+ "winapi",
+]
+
+[[package]]
+name = "vm-memory"
+version = "0.16.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fd5e56d48353c5f54ef50bd158a0452fc82f5383da840f7b8efc31695dd3b9d"
+dependencies = [
  "arc-swap",
  "libc",
+ "thiserror 1.0.48",
  "winapi",
 ]
 
@@ -2263,9 +2303,19 @@ checksum = "a4b5231d334edbc03b22704caa1a022e4c07491d6df736593f26094df8b04a51"
 
 [[package]]
 name = "vmm-sys-util"
-version = "0.11.1"
+version = "0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd64fe09d8e880e600c324e7d664760a17f56e9672b7495a86381b49e4f72f46"
+checksum = "48b7b084231214f7427041e4220d77dfe726897a6d41fddee450696e66ff2a29"
+dependencies = [
+ "bitflags 1.3.2",
+ "libc",
+]
+
+[[package]]
+name = "vmm-sys-util"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "506c62fdf617a5176827c2f9afbcf1be155b03a9b4bf9617a60dbc07e3a1642f"
 dependencies = [
  "bitflags 1.3.2",
  "libc",
