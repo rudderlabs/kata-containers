@@ -52,8 +52,6 @@ jobs:
           - kernel
           - kernel-confidential
           - kernel-dragonball-experimental
-          - kernel-nvidia-gpu
-          - kernel-nvidia-gpu-confidential
           - nydus
           - ovmf
           - ovmf-sev
@@ -168,8 +166,6 @@ jobs:
           - rootfs-image-mariner
           - rootfs-initrd
           - rootfs-initrd-confidential
-          - rootfs-initrd-nvidia-gpu
-          - rootfs-initrd-nvidia-gpu-confidential
     steps:
       - name: Login to Kata Containers quay.io
         if: ${{ inputs.push-to-registry == 'yes' }}
@@ -233,8 +229,6 @@ jobs:
         asset:
           - busybox
           - coco-guest-components
-          - kernel-nvidia-gpu-headers
-          - kernel-nvidia-gpu-confidential-headers
           - pause-image
     steps:
       - uses: geekyeggo/delete-artifact@f275313e70c08f6120db482d7a6b98377786765b # v5.1.0
