@@ -12,7 +12,6 @@ concurrency:
 
 jobs:
   kata-containers-ci-on-push:
-    if: ${{ contains(github.event.pull_request.labels.*.name, 'ok-to-test') }}
     permissions:
       contents: read
       packages: write
