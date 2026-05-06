@@ -1,0 +1,25 @@
+name: Kata Containers CI (Tag)
+on:
+  push:
+    tags:
+      - '*'
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  kata-containers-ci-on-tag:
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/ci.yaml
+    with:
+      commit-hash: ${{ github.sha }}
+      pr-number: ${{ github.ref_name }}
+      tag: ${{ github.ref_name }}
+      target-branch: ""

@@ -24,7 +24,7 @@ on:
       QUAY_DEPLOYER_PASSWORD:
         required: false
       KBUILD_SIGN_PIN:
-        required: true
+        required: false
 
 permissions: {}
 
@@ -53,7 +53,6 @@ jobs:
           - kernel
           - kernel-debug
           - kernel-dragonball-experimental
-          - kernel-nvidia-gpu
           - nydus
           - ovmf
           - ovmf-sev
@@ -110,7 +109,6 @@ jobs:
           ARTEFACT_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
           TARGET_BRANCH: ${{ inputs.target-branch }}
           RELEASE: ${{ inputs.stage == 'release' && 'yes' || 'no' }}
-          KBUILD_SIGN_PIN: ${{ contains(matrix.asset, 'nvidia') && secrets.KBUILD_SIGN_PIN || '' }}
 
       - name: Parse OCI image name and digest
         id: parse-oci-segments
@@ -150,15 +148,6 @@ jobs:
           retention-days: 15
           if-no-files-found: error
 
-      - name: store-extratarballs-artifact ${{ matrix.asset }}
-        if: ${{ startsWith(matrix.asset, 'kernel-nvidia-gpu') }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: kata-artifacts-amd64-${{ matrix.asset }}-modules${{ inputs.tarball-suffix }}
-          path: kata-build/kata-static-${{ matrix.asset }}-modules.tar.zst
-          retention-days: 15
-          if-no-files-found: error
-
   build-asset-rootfs:
     name: build-asset-rootfs
     runs-on: ubuntu-22.04
@@ -172,8 +161,6 @@ jobs:
           - rootfs-image
           - rootfs-image-confidential
           - rootfs-image-mariner
-          - rootfs-image-nvidia-gpu
-          - rootfs-image-nvidia-gpu-confidential
           - rootfs-initrd
           - rootfs-initrd-confidential
     concurrency:
@@ -224,7 +211,6 @@ jobs:
           ARTEFACT_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
           TARGET_BRANCH: ${{ inputs.target-branch }}
           RELEASE: ${{ inputs.stage == 'release' && 'yes' || 'no' }}
-          KBUILD_SIGN_PIN: ${{ contains(matrix.asset, 'nvidia') && secrets.KBUILD_SIGN_PIN || '' }}
 
       - name: store-artifact ${{ matrix.asset }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
@@ -244,7 +230,6 @@ jobs:
         asset:
           - busybox
           - coco-guest-components
-          - kernel-nvidia-gpu-modules
           - pause-image
     concurrency:
       group: ${{ github.workflow }}-${{ github.job }}-${{ github.event.pull_request.number || github.ref }}-amd64-${{ toJSON(matrix) }}
