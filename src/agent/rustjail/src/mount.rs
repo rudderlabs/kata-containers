@@ -5,6 +5,7 @@
 
 use anyhow::{anyhow, Context, Result};
 use libc::uid_t;
+use nix::errno::Errno;
 use nix::fcntl::{self, OFlag};
 #[cfg(not(test))]
 use nix::mount;
@@ -336,25 +337,19 @@ fn check_proc_mount(m: &Mount) -> Result<()> {
 
     if mount_dest == PROC_PATH {
         // only allow a mount on-top of proc if it's source is "proc"
-        unsafe {
-            let mut stats = MaybeUninit::<libc::statfs>::uninit();
-            let mount_source = m.source().as_ref().unwrap().display().to_string();
-            if mount_source
-                .with_nix_path(|path| libc::statfs(path.as_ptr(), stats.as_mut_ptr()))
-                .is_ok()
-            {
-                if stats.assume_init().f_type == PROC_SUPER_MAGIC {
-                    return Ok(());
-                }
-            } else {
-                return Ok(());
-            }
+        let mount_source = m.source().as_ref().unwrap().display().to_string();
 
-            return Err(anyhow!(format!(
+        let mut stats = MaybeUninit::<libc::statfs>::uninit();
+        let statfs_ret = mount_source
+            .with_nix_path(|path| unsafe { libc::statfs(path.as_ptr(), stats.as_mut_ptr()) })?;
+
+        return match Errno::result(statfs_ret) {
+            Ok(_) if unsafe { stats.assume_init().f_type } == PROC_SUPER_MAGIC => Ok(()),
+            Ok(_) | Err(_) => Err(anyhow!(format!(
                 "{} cannot be mounted to {} because it is not of type proc",
                 &mount_source, &mount_dest
-            )));
-        }
+            ))),
+        };
     }
 
     if mount_dest.starts_with(PROC_PATH) {
@@ -533,7 +528,7 @@ pub fn pivot_rootfs<P: ?Sized + NixPath + std::fmt::Debug>(path: &P) -> Result<(
 
     // Change to the new root so that the pivot_root actually acts on it.
     unistd::fchdir(newroot)?;
-    pivot_root(".", ".").context(format!("failed to pivot_root on {:?}", path))?;
+    pivot_root(".", ".").context(format!("failed to pivot_root on {path:?}"))?;
 
     // Currently our "." is oldroot (according to the current kernel code).
     // However, purely for safety, we will fchdir(oldroot) since there isn't
@@ -757,15 +752,6 @@ fn parse_mount(m: &Mount) -> (MsFlags, MsFlags, String) {
     (flags, pgflags, data.join(","))
 }
 
-// This function constructs a canonicalized path by combining the `rootfs` and `unsafe_path` elements.
-// The resulting path is guaranteed to be ("below" / "in a directory under") the `rootfs` directory.
-//
-// Parameters:
-//
-// - `rootfs` is the absolute path to the root of the containers root filesystem directory.
-// - `unsafe_path` is path inside a container. It is unsafe since it may try to "escape" from the containers
-//    rootfs by using one or more "../" path elements or is its a symlink to path.
-
 fn mount_from(
     cfd_log: RawFd,
     m: &Mount,
@@ -871,7 +857,7 @@ fn mount_from(
         dest.as_str(),
         Some(mount_typ.as_str()),
         flags,
-        Some(d.as_str()),
+        Some(d.as_str()).filter(|s| !s.is_empty()),
     )
     .inspect_err(|e| log_child!(cfd_log, "mount error: {:?}", e))?;
 
@@ -934,7 +920,7 @@ fn create_devices(devices: &[LinuxDevice], bind: bool) -> Result<()> {
     for dev in DEFAULT_DEVICES.iter() {
         let dev_path = dev.path().display().to_string();
         let path = Path::new(&dev_path[1..]);
-        op(dev, path).context(format!("Creating container device {:?}", dev))?;
+        op(dev, path).context(format!("Creating container device {dev:?}"))?;
     }
     for dev in devices {
         let dev_path = &dev.path();
@@ -946,9 +932,9 @@ fn create_devices(devices: &[LinuxDevice], bind: bool) -> Result<()> {
             anyhow!(msg)
         })?;
         if let Some(dir) = path.parent() {
-            fs::create_dir_all(dir).context(format!("Creating container device {:?}", dev))?;
+            fs::create_dir_all(dir).context(format!("Creating container device {dev:?}"))?;
         }
-        op(dev, path).context(format!("Creating container device {:?}", dev))?;
+        op(dev, path).context(format!("Creating container device {dev:?}"))?;
     }
     stat::umask(old);
     Ok(())
@@ -1376,7 +1362,7 @@ mod tests {
             .typ(oci::LinuxDeviceType::C)
             .major(0)
             .minor(0)
-            .file_mode(0660 as u32)
+            .file_mode(0o660_u32)
             .uid(unistd::getuid().as_raw())
             .gid(unistd::getgid().as_raw())
             .build()
@@ -1614,7 +1600,7 @@ mod tests {
             },
             TestData {
                 mountinfo_data: Some(
-                    "22 933 0:20 /foo\040-\040bar /sys rw,nodev shared:2 - sysfs sysfs rw,noexec",
+                    "22 933 0:20 /foo\x20-\x20bar /sys rw,nodev shared:2 - sysfs sysfs rw,noexec",
                 ),
                 result: Ok(vec![Info {
                     mount_point: "/sys".to_string(),

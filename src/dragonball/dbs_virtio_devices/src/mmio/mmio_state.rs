@@ -10,7 +10,9 @@ use std::sync::Arc;
 
 use dbs_address_space::AddressSpace;
 use dbs_device::resources::DeviceResources;
-use dbs_interrupt::{DeviceInterruptManager, DeviceInterruptMode, InterruptIndex, KvmIrqManager};
+use dbs_interrupt::{
+    DeviceInterruptManager, DeviceInterruptMode, InterruptIndex, InterruptManager,
+};
 use kvm_bindings::kvm_userspace_memory_region;
 use kvm_ioctls::{IoEventAddress, NoDatamatch, VmFd};
 use log::{debug, error, info, warn};
@@ -28,7 +30,7 @@ pub struct MmioV2DeviceState<AS: GuestAddressSpace + Clone, Q: QueueT, R: GuestM
     vm_fd: Arc<VmFd>,
     vm_as: AS,
     address_space: AddressSpace,
-    intr_mgr: DeviceInterruptManager<Arc<KvmIrqManager>>,
+    intr_mgr: DeviceInterruptManager<Arc<Box<dyn InterruptManager>>>,
     device_resources: DeviceResources,
     queues: Vec<VirtioQueueConfig<Q>>,
 
@@ -70,7 +72,7 @@ where
         vm_fd: Arc<VmFd>,
         vm_as: AS,
         address_space: AddressSpace,
-        irq_manager: Arc<KvmIrqManager>,
+        irq_manager: Arc<Box<dyn InterruptManager>>,
         device_resources: DeviceResources,
         mmio_base: u64,
         doorbell_enabled: bool,
@@ -86,7 +88,7 @@ where
         let shm_regions = device
             .set_resource(vm_fd.clone(), device_resources.clone())
             .map_err(|e| {
-                error!("Failed to assign device resource to virtio device: {}", e);
+                error!("Failed to assign device resource to virtio device: {e}");
                 e
             })?;
 
@@ -144,7 +146,7 @@ where
             .activate(config)
             .map(|_| self.device_activated = true)
             .map_err(|e| {
-                error!("device activate error: {:?}", e);
+                error!("device activate error: {e:?}");
                 Error::ActivateError(Box::new(e))
             })
     }
@@ -362,7 +364,7 @@ where
             for queue in self.queues.iter_mut() {
                 let new_queue = Q::new(queue.queue.max_size());
                 if let Err(e) = new_queue {
-                    warn!("reset device failed because new virtio-queue could not be created due to {:?}", e);
+                    warn!("reset device failed because new virtio-queue could not be created due to {e:?}");
                     return Err(Error::VirtioQueueError(e));
                 } else {
                     // unwrap is safe here since we have checked new_queue result above.
@@ -371,6 +373,7 @@ where
             }
 
             let _ = self.intr_mgr.reset();
+            self.unregister_ioevent_doorbell();
             self.unregister_ioevent();
             self.features_select = 0;
             self.acked_features_select = 0;
@@ -479,7 +482,7 @@ where
                 {
                     Ok(_) => self.msi = Some(Msi::default()),
                     Err(e) => {
-                        warn!("mmio_v2: failed to switch to MSI interrupt mode: {:?}", e);
+                        warn!("mmio_v2: failed to switch to MSI interrupt mode: {e:?}");
                         device.set_driver_failed();
                     }
                 }
@@ -492,10 +495,7 @@ where
             {
                 Ok(_) => self.msi = None,
                 Err(e) => {
-                    warn!(
-                        "mmio_v2: failed to switch to legacy interrupt mode: {:?}",
-                        e
-                    );
+                    warn!("mmio_v2: failed to switch to legacy interrupt mode: {e:?}");
                     device.set_driver_failed();
                 }
             }
@@ -531,7 +531,7 @@ where
                     .intr_mgr
                     .get_msi_mask(index)
                     .map_err(Error::InterruptError)?;
-                debug!("mmio_v2 old mask {}, mask {}", old_mask, mask);
+                debug!("mmio_v2 old mask {old_mask}, mask {mask}");
 
                 if !old_mask && mask {
                     group.mask(index)?;
@@ -555,7 +555,7 @@ where
         match v & MMIO_MSI_CMD_CODE_MASK {
             MMIO_MSI_CMD_CODE_UPDATE => {
                 if arg > self.device.queue_max_sizes().len() as u16 {
-                    info!("mmio_v2: configure interrupt for invalid vector {}", v,);
+                    info!("mmio_v2: configure interrupt for invalid vector {v}",);
                 } else if let Err(e) = self.update_msi_cfg(arg) {
                     warn_or_panic!("mmio_v2: failed to configure vector {}, {:?}", v, e);
                 }
@@ -571,7 +571,7 @@ where
                 }
             }
             _ => {
-                warn!("mmio_v2: unknown msi command: 0x{:x}", v);
+                warn!("mmio_v2: unknown msi command: 0x{v:x}");
                 device.set_driver_failed();
             }
         }
@@ -607,7 +607,9 @@ where
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use dbs_interrupt::KvmIrqManager;
     use kvm_ioctls::Kvm;
+    use test_utils::skip_if_kvm_unaccessable;
     use virtio_queue::QueueSync;
     use vm_memory::{GuestAddress, GuestMemoryMmap, GuestRegionMmap};
 
@@ -629,7 +631,8 @@ pub(crate) mod tests {
         let vm_fd = Arc::new(kvm.create_vm().unwrap());
         vm_fd.create_irq_chip().unwrap();
 
-        let irq_manager = Arc::new(KvmIrqManager::new(vm_fd.clone()));
+        let irq_manager: Arc<Box<dyn InterruptManager>> =
+            Arc::new(Box::new(KvmIrqManager::new(vm_fd.clone())));
         irq_manager.initialize().unwrap();
 
         let device = MmioDevice::new(ctrl_queue_size);
@@ -651,6 +654,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_virtio_mmio_state_new() {
+        skip_if_kvm_unaccessable!();
         let mut state = get_mmio_state(false, false, 1);
 
         assert_eq!(state.queues.len(), 3);

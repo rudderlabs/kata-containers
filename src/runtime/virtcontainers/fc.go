@@ -38,7 +38,7 @@ import (
 	"github.com/containerd/fifo"
 	httptransport "github.com/go-openapi/runtime/client"
 	"github.com/go-openapi/strfmt"
-	"github.com/opencontainers/selinux/go-selinux/label"
+	selinux "github.com/opencontainers/selinux/go-selinux"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
@@ -699,7 +699,12 @@ func (fc *firecracker) fcInitConfiguration(ctx context.Context) error {
 		return err
 	}
 
-	params, err := GetKernelRootParams(fc.config.RootfsType, true, false)
+	params, err := GetKernelRootParams(
+		fc.config.RootfsType,
+		true,
+		false,
+		fc.config.KernelVerityParams,
+	)
 	if err != nil {
 		return err
 	}
@@ -788,10 +793,10 @@ func (fc *firecracker) StartVM(ctx context.Context, timeout int) error {
 	// them under confinement.
 	if !fc.config.DisableSeLinux {
 
-		if err := label.SetProcessLabel(fc.config.SELinuxProcessLabel); err != nil {
+		if err := selinux.SetExecLabel(fc.config.SELinuxProcessLabel); err != nil {
 			return err
 		}
-		defer label.SetProcessLabel("")
+		defer selinux.SetExecLabel("")
 	}
 
 	err = fc.fcInit(ctx, fcTimeout)
@@ -932,7 +937,7 @@ func (fc *firecracker) fcAddNetDevice(ctx context.Context, endpoint Endpoint) {
 
 	// VMFds are not used by Firecracker, as it opens the tuntap
 	// device by its name.  Let's just close those.
-	for _, f := range endpoint.NetworkPair().TapInterface.VMFds {
+	for _, f := range endpoint.NetworkPair().VMFds {
 		f.Close()
 	}
 
@@ -982,7 +987,7 @@ func (fc *firecracker) fcAddNetDevice(ctx context.Context, endpoint Endpoint) {
 	ifaceCfg := &models.NetworkInterface{
 		GuestMac:      endpoint.HardwareAddr(),
 		IfaceID:       &ifaceID,
-		HostDevName:   &endpoint.NetworkPair().TapInterface.TAPIface.Name,
+		HostDevName:   &endpoint.NetworkPair().TAPIface.Name,
 		RxRateLimiter: &rxRateLimiter,
 		TxRateLimiter: &txRateLimiter,
 	}

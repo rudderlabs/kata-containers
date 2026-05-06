@@ -6,6 +6,7 @@ edition = { workspace = true }
 license = { workspace = true }
 
 [dev-dependencies]
+rstest = { workspace = true }
 tempfile = { workspace = true }
 
 # Local dev-dependencies
@@ -15,9 +16,8 @@ test-utils = { workspace = true }
 actix-rt = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
-bitflags = "2.9.0"
 byte-unit = "5.1.6"
-cgroups-rs = { git = "https://github.com/kata-containers/cgroups-rs", rev = "v0.3.5" }
+cgroups-rs = { version = "0.5.0", features = ["oci"] }
 futures = "0.3.11"
 lazy_static = { workspace = true }
 libc = { workspace = true }
@@ -29,19 +29,19 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 slog = { workspace = true }
 slog-scope = { workspace = true }
-tokio = { workspace = true, features = ["process"] }
+tokio = { workspace = true, features = ["process", "time"] }
 tracing = { workspace = true }
 uuid = { version = "0.4", features = ["v4"] }
 oci-spec = { workspace = true }
 inotify = "0.11.0"
 walkdir = "2.5.0"
-flate2 = { version = "1.0", features = ["zlib"] }
+flate2 = "1.1"
 tempfile = "3.19.1"
+hex = "0.4"
 
 ## Dependencies from `rust-netlink`
-netlink-packet-route = "0.22"
-netlink-sys = "0.8"
-rtnetlink = "0.16"
+netlink-packet-route = "0.26"
+rtnetlink = "0.19"
 
 # Local dependencies
 agent = { workspace = true }
@@ -53,3 +53,7 @@ persist = { workspace = true }
 tests_utils = { workspace = true }
 
 [features]
+
+
+[package.metadata.cargo-machete]
+ignored = ["slog-scope"]

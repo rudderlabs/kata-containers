@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
+use serde::{Deserialize, Deserializer};
 use std::io::Result;
 
 use crate::config::{ConfigOps, TomlConfig};
@@ -13,12 +14,12 @@ use super::default::{
     DEFAULT_AGENT_DIAL_TIMEOUT_MS, DEFAULT_AGENT_LOG_PORT, DEFAULT_AGENT_VSOCK_PORT,
     DEFAULT_PASSFD_LISTENER_PORT,
 };
-use crate::eother;
 
 /// agent name of Kata agent.
 pub const AGENT_NAME_KATA: &str = "kata";
 
 #[derive(Default, Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct MemAgent {
     #[serde(default, alias = "mem_agent_enable")]
     pub enable: bool,
@@ -58,6 +59,7 @@ pub struct MemAgent {
 
 /// Kata agent configuration information.
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct Agent {
     /// If enabled, the agent will log additional debug messages to the system log.
     #[serde(default, rename = "enable_debug")]
@@ -115,7 +117,11 @@ pub struct Agent {
     /// This timeout value is used to set the maximum duration for the agent to process a CreateContainerRequest.
     /// It's also used to ensure that workloads, especially those involving large image pulls within the guest,
     /// have sufficient time to complete.
-    #[serde(default = "default_request_timeout", rename = "create_container_timeout")]
+    #[serde(
+        default = "default_request_timeout",
+        rename = "create_container_timeout",
+        deserialize_with = "deserialize_secs_to_millis"
+    )]
     pub request_timeout_ms: u32,
 
     /// Agent health check request timeout value in millisecond
@@ -127,12 +133,12 @@ pub struct Agent {
     /// These modules will be loaded in the guest kernel using modprobe(8).
     /// The following example can be used to load two kernel modules with parameters:
     ///  - kernel_modules=["e1000e InterruptThrottleRate=3000,3000,3000 EEE=1", "i915 enable_ppgtt=0"]
-    /// The first word is considered as the module name and the rest as its parameters.
-    /// Container will not be started when:
+    ///    The first word is considered as the module name and the rest as its parameters.
+    ///    Container will not be started when:
     /// - A kernel module is specified and the modprobe command is not installed in the guest
     ///   or it fails loading the module.
     /// - The module is not available in the guest or it doesn't met the guest kernel
-    ///    requirements, like architecture and version.
+    ///   requirements, like architecture and version.
     #[serde(default)]
     pub kernel_modules: Vec<String>,
 
@@ -140,9 +146,27 @@ pub struct Agent {
     #[serde(default)]
     pub container_pipe_size: u32,
 
+    /// Timeout in seconds for guest components (attestation-agent, confidential-data-hub)
+    /// to create their Unix sockets after being spawned by the agent.
+    #[serde(default)]
+    pub launch_process_timeout: u32,
+
     /// Memory agent configuration
     #[serde(default)]
     pub mem_agent: MemAgent,
+
+    /// Agent policy
+    #[serde(default)]
+    pub policy: String,
+}
+
+fn deserialize_secs_to_millis<'de, D>(deserializer: D) -> std::result::Result<u32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let secs = u32::deserialize(deserializer)?;
+
+    Ok(secs.saturating_mul(1000))
 }
 
 impl std::default::Default for Agent {
@@ -161,7 +185,9 @@ impl std::default::Default for Agent {
             health_check_request_timeout_ms: 90_000,
             kernel_modules: Default::default(),
             container_pipe_size: 0,
+            launch_process_timeout: 0,
             mem_agent: MemAgent::default(),
+            policy: Default::default(),
         }
     }
 }
@@ -205,7 +231,7 @@ fn default_health_check_timeout() -> u32 {
 impl Agent {
     fn validate(&self) -> Result<()> {
         if self.dial_timeout_ms == 0 {
-            return Err(eother!("dial_timeout_ms couldn't be 0."));
+            return Err(std::io::Error::other("dial_timeout_ms couldn't be 0."));
         }
 
         Ok(())

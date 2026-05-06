@@ -2,13 +2,13 @@
 // Copyright 2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::io::{self, Seek, SeekFrom, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::ops::Deref;
 use std::result;
 
 use log::error;
 use virtio_bindings::bindings::virtio_blk::*;
-use virtio_queue::{Descriptor, DescriptorChain};
+use virtio_queue::{desc::split::Descriptor, DescriptorChain};
 use vm_memory::{ByteValued, Bytes, GuestAddress, GuestMemory, GuestMemoryError};
 
 use crate::{
@@ -136,12 +136,12 @@ impl Request {
         let mut desc = desc_chain
             .next()
             .ok_or(Error::DescriptorChainTooShort)
-            .inspect_err(|_| error!("virtio-blk: Request {:?} has only head descriptor", req))?;
+            .inspect_err(|_| error!("virtio-blk: Request {req:?} has only head descriptor"))?;
         if !desc.has_next() {
             status_desc = desc;
             // Only flush requests are allowed to skip the data descriptor.
             if req.request_type != RequestType::Flush {
-                error!("virtio-blk: Request {:?} need a data descriptor", req);
+                error!("virtio-blk: Request {req:?} need a data descriptor");
                 return Err(Error::DescriptorChainTooShort);
             }
         } else {
@@ -178,10 +178,7 @@ impl Request {
         match self.request_type {
             RequestType::Out => {
                 if desc.is_write_only() {
-                    error!(
-                        "virtio-blk: Request {:?} sees unexpected write-only descriptor",
-                        self
-                    );
+                    error!("virtio-blk: Request {self:?} sees unexpected write-only descriptor");
                     return Err(Error::UnexpectedWriteOnlyDescriptor);
                 } else if desc.len() > max_size {
                     error!(
@@ -196,8 +193,7 @@ impl Request {
             RequestType::In => {
                 if !desc.is_write_only() {
                     error!(
-                        "virtio-blk: Request {:?} sees unexpected read-only descriptor for read",
-                        self
+                        "virtio-blk: Request {self:?} sees unexpected read-only descriptor for read"
                     );
                     return Err(Error::UnexpectedReadOnlyDescriptor);
                 } else if desc.len() > max_size {
@@ -212,8 +208,7 @@ impl Request {
             }
             RequestType::GetDeviceID if !desc.is_write_only() => {
                 error!(
-                    "virtio-blk: Request {:?} sees unexpected read-only descriptor for GetDeviceID",
-                    self
+                    "virtio-blk: Request {self:?} sees unexpected read-only descriptor for GetDeviceID"
                 );
                 return Err(Error::UnexpectedReadOnlyDescriptor);
             }
@@ -236,13 +231,19 @@ impl Request {
         for io in data_descs {
             match self.request_type {
                 RequestType::In => {
-                    mem.read_from(GuestAddress(io.data_addr), disk, io.data_len)
+                    let mut buf = vec![0u8; io.data_len];
+                    disk.read_exact(&mut buf)
+                        .map_err(|e| ExecuteError::Read(GuestMemoryError::IOError(e)))?;
+                    mem.write_slice(&buf, GuestAddress(io.data_addr))
                         .map_err(ExecuteError::Read)?;
                     len += io.data_len;
                 }
                 RequestType::Out => {
-                    mem.write_to(GuestAddress(io.data_addr), disk, io.data_len)
+                    let mut buf = vec![0u8; io.data_len];
+                    mem.read_slice(&mut buf, GuestAddress(io.data_addr))
                         .map_err(ExecuteError::Write)?;
+                    disk.write_all(&buf)
+                        .map_err(|e| ExecuteError::Write(GuestMemoryError::IOError(e)))?;
                 }
                 RequestType::Flush => match disk.flush() {
                     Ok(_) => {}

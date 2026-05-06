@@ -17,7 +17,12 @@ use common::{
     },
 };
 use kata_sys_util::k8s::update_ephemeral_storage_type;
-use kata_types::k8s;
+use kata_types::{
+    annotations::{BUNDLE_PATH_KEY, CONTAINER_TYPE_KEY, KATA_ANNO_CFG_HYPERVISOR_INIT_DATA},
+    config::TomlConfig,
+    container::{update_ocispec_annotations, POD_CONTAINER, POD_SANDBOX},
+    k8s::{self, container_type},
+};
 use oci_spec::runtime as oci;
 
 use oci::{LinuxResources, Process as OCIProcess};
@@ -30,7 +35,7 @@ use super::{
     process::{Process, ProcessWatcher},
     ContainerInner,
 };
-use crate::container_manager::logger_with_process;
+use crate::container_manager::{is_termination_signal, logger_with_process};
 
 pub struct Exec {
     pub(crate) process: Process,
@@ -99,23 +104,28 @@ impl Container {
         let toml_config = self.resource_manager.config().await;
         let config = &self.config;
         let sandbox_pidns = is_pid_namespace_enabled(&spec);
-        let disable_guest_selinux = match toml_config
-            .hypervisor
-            .get(&toml_config.runtime.hypervisor_name)
-        {
-            Some(hypervisor_config) => hypervisor_config.disable_guest_selinux,
-            // This shouldn't happen due to how logic in the config crate works
-            // but we need to handle it anyway so we stick with the default
-            // value of disable_guest_selinux in configuration.toml which
-            // is 'true'.
-            None => true,
-        };
+        let disable_guest_selinux = get_disable_guest_selinux(&toml_config);
         let annotations = spec.annotations().clone().unwrap_or_default();
+        let container_typ = container_type(&spec);
+        let pod_type_anno = if container_typ.is_pod_container() {
+            (CONTAINER_TYPE_KEY.to_string(), POD_CONTAINER.to_string())
+        } else {
+            (CONTAINER_TYPE_KEY.to_string(), POD_SANDBOX.to_string())
+        };
+
+        let bund_path_anno = (BUNDLE_PATH_KEY.to_string(), config.bundle.clone());
+        let updated_annotations = update_ocispec_annotations(
+            &annotations,
+            &[KATA_ANNO_CFG_HYPERVISOR_INIT_DATA],
+            &[pod_type_anno, bund_path_anno],
+        );
+        spec.set_annotations(Some(updated_annotations.clone()));
 
         amend_spec(
             &mut spec,
             toml_config.runtime.disable_guest_seccomp,
             disable_guest_selinux,
+            toml_config.runtime.disable_guest_empty_dir,
         )
         .context("amend spec")?;
 
@@ -133,7 +143,7 @@ impl Container {
                 root,
                 &config.bundle,
                 &config.rootfs_mounts,
-                &annotations,
+                &updated_annotations,
             )
             .await
             .context("handler rootfs")?;
@@ -148,8 +158,8 @@ impl Container {
         );
 
         let mut storages = vec![];
-        if let Some(storage) = rootfs.get_storage().await {
-            storages.push(storage);
+        if let Some(mut storage_list) = rootfs.get_storage().await {
+            storages.append(&mut storage_list);
         }
         inner.rootfs.push(rootfs);
 
@@ -197,6 +207,12 @@ impl Container {
             .await?;
         if let Some(linux) = &mut spec.linux_mut() {
             linux.set_resources(resources);
+
+            // In certain scenarios, particularly under CoCo/Agent Policy enforcement,
+            // the value of `Linux.Resources.Devices` should be empty.
+            if let Some(resource) = linux.resources_mut() {
+                resource.set_devices(None);
+            }
         }
 
         let container_name = k8s::container_name(&spec);
@@ -224,6 +240,12 @@ impl Container {
                 .passfd_io_init(hvsock_uds_path, *passfd_port)
                 .await?;
         }
+
+        info!(
+            sl!(),
+            "OCI Spec {:?} within CreateContainerRequest.",
+            spec.clone()
+        );
 
         // create container
         let r = agent::CreateContainerRequest {
@@ -399,6 +421,31 @@ impl Container {
         all: bool,
     ) -> Result<()> {
         let mut inner = self.inner.write().await;
+
+        // Check if process is already stopped before signaling.
+        // For SIGKILL/SIGTERM, if the process is already stopped, return success immediately.
+        // This is critical for proper cleanup when VM dies - the wait thread sets status to
+        // Stopped even on error, so subsequent Kill() calls will see it as already stopped.
+        let is_term_signal = is_termination_signal(signal);
+        let process_status = if container_process.exec_id.is_empty() {
+            inner.init_process.get_status().await
+        } else if let Some(exec) = inner.exec_processes.get(&container_process.exec_id) {
+            exec.process.get_status().await
+        } else {
+            ProcessStatus::Unknown
+        };
+
+        if is_term_signal && process_status == ProcessStatus::Stopped {
+            info!(
+                self.logger,
+                "process has already stopped, skipping signal";
+                "container" => &self.container_id.container_id,
+                "process" => ?container_process,
+                "signal" => signal
+            );
+            return Ok(());
+        }
+
         inner.signal_process(container_process, signal, all).await
     }
 
@@ -409,8 +456,13 @@ impl Container {
         stdout: Option<String>,
         stderr: Option<String>,
         terminal: bool,
-        oci_process: OCIProcess,
+        mut oci_process: OCIProcess,
     ) -> Result<()> {
+        let toml_config = self.resource_manager.config().await;
+        if get_disable_guest_selinux(&toml_config) {
+            oci_process.set_selinux_label(None);
+        }
+
         let process = Process::new(
             container_process,
             self.pid,
@@ -435,6 +487,10 @@ impl Container {
     }
 
     pub async fn stop_process(&self, container_process: &ContainerProcess) -> Result<()> {
+        if container_process.process_type == ProcessType::Container {
+            self.copy_termination_log().await;
+        }
+
         let mut inner = self.inner.write().await;
         let device_manager = self.resource_manager.get_device_manager().await;
         inner
@@ -454,6 +510,77 @@ impl Container {
         }
 
         Ok(())
+    }
+
+    async fn copy_termination_log(&self) {
+        let toml_config = self.resource_manager.config().await;
+        let shared_fs = toml_config
+            .hypervisor
+            .get(&toml_config.runtime.hypervisor_name)
+            .and_then(|h| h.shared_fs.shared_fs.as_deref());
+
+        // When a shared filesystem is configured the host can read the
+        // termination log directly.  shared_fs == None means no shared
+        // filesystem (the "none" config value is normalised to None by
+        // SharedFsInfo::adjust_config).
+        if shared_fs.is_some() {
+            return;
+        }
+
+        let annotations = self.spec.annotations().clone().unwrap_or_default();
+        let policy = annotations.get("io.kubernetes.container.terminationMessagePolicy");
+        if policy.map(|p| p.as_str()) != Some("File") {
+            return;
+        }
+
+        let termination_path =
+            match annotations.get("io.kubernetes.container.terminationMessagePath") {
+                Some(p) if !p.is_empty() => p.clone(),
+                _ => return,
+            };
+
+        let req = agent::GetDiagnosticDataRequest {
+            log_type: "termination_log".to_string(),
+            container_id: self.container_id.container_id.clone(),
+        };
+
+        // The kubelet bind-mounts a host file into the container at
+        // terminationMessagePath, then reads back from that host file.
+        // With shared_fs=none the guest cannot write through that mount,
+        // so we locate the host-side source path from the OCI mounts and
+        // write the data there directly.
+        let host_path = self.spec.mounts().as_ref().and_then(|mounts| {
+            mounts
+                .iter()
+                .find(|m| m.destination() == std::path::Path::new(&termination_path))
+                .and_then(|m| m.source().clone())
+        });
+
+        let host_path = match host_path {
+            Some(p) => p,
+            None => {
+                warn!(
+                    self.logger,
+                    "No host mount found for termination message path"
+                );
+                return;
+            }
+        };
+
+        match self.agent.get_diagnostic_data(req).await {
+            Ok(resp) if !resp.data.is_empty() => {
+                if let Err(e) = tokio::fs::write(&host_path, resp.data.as_bytes()).await {
+                    warn!(self.logger, "Failed to write termination message: {}", e);
+                }
+            }
+            Ok(_) => {}
+            Err(e) => {
+                warn!(
+                    self.logger,
+                    "Failed to get termination message from guest: {}", e
+                );
+            }
+        }
     }
 
     pub async fn pause(&self) -> Result<()> {
@@ -591,28 +718,21 @@ fn amend_spec(
     spec: &mut oci::Spec,
     disable_guest_seccomp: bool,
     disable_guest_selinux: bool,
+    disable_guest_empty_dir: bool,
 ) -> Result<()> {
     // Only the StartContainer hook needs to be reserved for execution in the guest
-    let start_container_hooks = if let Some(hooks) = spec.hooks().as_ref() {
-        hooks.start_container().clone()
-    } else {
-        None
-    };
-
-    let mut oci_hooks = oci::Hooks::default();
-    oci_hooks.set_start_container(start_container_hooks);
-    spec.set_hooks(Some(oci_hooks));
+    if let Some(hooks) = spec.hooks().as_ref() {
+        let mut oci_hooks = oci::Hooks::default();
+        oci_hooks.set_start_container(hooks.start_container().clone());
+        spec.set_hooks(Some(oci_hooks));
+    }
 
     // special process K8s ephemeral volumes.
-    update_ephemeral_storage_type(spec);
+    update_ephemeral_storage_type(spec, disable_guest_empty_dir);
 
-    if let Some(linux) = spec.linux_mut() {
+    if let Some(linux) = &mut spec.linux_mut() {
         if disable_guest_seccomp {
             linux.set_seccomp(None);
-        }
-
-        if let Some(_resource) = linux.resources_mut() {
-            LinuxResources::default();
         }
 
         // Host pidns path does not make sense in kata. Let's just align it with
@@ -648,6 +768,20 @@ fn amend_spec(
     Ok(())
 }
 
+fn get_disable_guest_selinux(toml_config: &TomlConfig) -> bool {
+    match toml_config
+        .hypervisor
+        .get(&toml_config.runtime.hypervisor_name)
+    {
+        Some(hypervisor_config) => hypervisor_config.disable_guest_selinux,
+        // This shouldn't happen due to how logic in the config crate works
+        // but we need to handle it anyway so we stick with the default
+        // value of disable_guest_selinux in configuration.toml which
+        // is 'true'.
+        None => true,
+    }
+}
+
 // is_pid_namespace_enabled checks if Pid namespace for a container needs to be shared with its sandbox
 // pid namespace.
 fn is_pid_namespace_enabled(spec: &oci::Spec) -> bool {
@@ -681,11 +815,11 @@ mod tests {
         assert!(spec.linux().as_ref().unwrap().seccomp().is_some());
 
         // disable_guest_seccomp = false
-        amend_spec(&mut spec, false, false).unwrap();
+        amend_spec(&mut spec, false, false, false).unwrap();
         assert!(spec.linux().as_ref().unwrap().seccomp().is_some());
 
         // disable_guest_seccomp = true
-        amend_spec(&mut spec, true, false).unwrap();
+        amend_spec(&mut spec, true, false, false).unwrap();
         assert!(spec.linux().as_ref().unwrap().seccomp().is_none());
     }
 
@@ -708,12 +842,12 @@ mod tests {
             .unwrap();
 
         // disable_guest_selinux = false, selinux labels are left alone
-        amend_spec(&mut spec, false, false).unwrap();
+        amend_spec(&mut spec, false, false, false).unwrap();
         assert!(spec.process().as_ref().unwrap().selinux_label() == &Some("xxx".to_owned()));
         assert!(spec.linux().as_ref().unwrap().mount_label() == &Some("yyy".to_owned()));
 
         // disable_guest_selinux = true, selinux labels are reset
-        amend_spec(&mut spec, false, true).unwrap();
+        amend_spec(&mut spec, false, true, false).unwrap();
         assert!(spec.process().as_ref().unwrap().selinux_label().is_none());
         assert!(spec.linux().as_ref().unwrap().mount_label().is_none());
     }

@@ -15,6 +15,7 @@ use anyhow::{anyhow, Context, Result};
 use cdi::annotations::parse_annotations;
 use cdi::cache::{new_cache, with_auto_refresh, CdiOption};
 use cdi::spec_dirs::with_spec_dirs;
+use container_device_interface as cdi;
 use kata_types::device::DeviceHandlerManager;
 use nix::sys::stat;
 use oci::{LinuxDeviceCgroup, Spec};
@@ -408,7 +409,7 @@ pub fn update_env_pci(
     // Below code updates both of them in two passes:
     // - 1st pass updates PCIDEVICE_<prefix>_<resource-name> and collects host to guest PCI address mapping
     let mut pci_dev_map: HashMap<String, HashMap<String, String>> = HashMap::new();
-    for envvar in env.iter_mut() {
+    'env_loop: for envvar in env.iter_mut() {
         let eqpos = envvar
             .find('=')
             .ok_or_else(|| anyhow!("Malformed OCI env entry {:?}", envvar))?;
@@ -423,8 +424,17 @@ pub fn update_env_pci(
         let mut addr_map: HashMap<String, String> = HashMap::new();
         let mut guest_addrs = Vec::<String>::new();
         for host_addr_str in val.split(',') {
-            let host_addr = pci::Address::from_str(host_addr_str)
-                .with_context(|| format!("Can't parse {} environment variable", name))?;
+            let host_addr = match pci::Address::from_str(host_addr_str) {
+                Ok(addr) => addr,
+                Err(_) => {
+                    tracing::info!(
+                        name,
+                        host_addr_str,
+                        "skipping non-PCI address in PCIDEVICE env var"
+                    );
+                    continue 'env_loop;
+                }
+            };
             let host_guest = pcimap
                 .get(cid)
                 .ok_or_else(|| anyhow!("No PCI mapping found for container {}", cid))?;
@@ -432,11 +442,11 @@ pub fn update_env_pci(
                 .get(&host_addr)
                 .ok_or_else(|| anyhow!("Unable to translate host PCI address {}", host_addr))?;
 
-            guest_addrs.push(format!("{}", guest_addr));
-            addr_map.insert(host_addr_str.to_string(), format!("{}", guest_addr));
+            guest_addrs.push(format!("{guest_addr}"));
+            addr_map.insert(host_addr_str.to_string(), format!("{guest_addr}"));
         }
 
-        pci_dev_map.insert(format!("{}_INFO", name), addr_map);
+        pci_dev_map.insert(format!("{name}_INFO"), addr_map);
 
         envvar.replace_range(eqpos + 1.., guest_addrs.join(",").as_str());
     }
@@ -525,7 +535,7 @@ fn update_spec_devices(
             "Missing devices in OCI spec: {:?}",
             updates
                 .keys()
-                .map(|d| format!("{:?}", d))
+                .map(|d| format!("{d:?}"))
                 .collect::<Vec<_>>()
                 .join(" ")
         ));
@@ -571,7 +581,7 @@ pub fn pcipath_to_sysfs(root_bus_sysfs: &str, pcipath: &pci::Path) -> Result<Str
     for i in 0..pcipath.len() {
         let bdf = format!("{}:{}", bus, pcipath[i]);
 
-        relpath = format!("{}/{}", relpath, bdf);
+        relpath = format!("{relpath}/{bdf}");
 
         if i == pcipath.len() - 1 {
             // Final device need not be a bridge
@@ -579,7 +589,7 @@ pub fn pcipath_to_sysfs(root_bus_sysfs: &str, pcipath: &pci::Path) -> Result<Str
         }
 
         // Find out the bus exposed by bridge
-        let bridgebuspath = format!("{}{}/pci_bus", root_bus_sysfs, relpath);
+        let bridgebuspath = format!("{root_bus_sysfs}{relpath}/pci_bus");
         let mut files: Vec<_> = fs::read_dir(&bridgebuspath)?.collect();
 
         match files.pop() {
@@ -1086,6 +1096,42 @@ mod tests {
     }
 
     #[test]
+    fn test_update_env_pci_non_pci_addresses() {
+        let mut env = vec![
+            "PCIDEVICE_NVIDIA_COM_BF_SF=mlx5_core.sf.10".to_string(),
+            "PCIDEVICE_NVIDIA_COM_BF_SF_INFO={\"mlx5_core.sf.10\":{}}".to_string(),
+            "PCIDEVICE_REAL=0000:1a:01.0".to_string(),
+        ];
+
+        let example_map = [("0000:1a:01.0", "0000:01:01.0")];
+        let _pci_fixups: HashMap<pci::Address, pci::Address> = example_map
+            .iter()
+            .map(|(h, g)| {
+                (
+                    pci::Address::from_str(h).unwrap(),
+                    pci::Address::from_str(g).unwrap(),
+                )
+            })
+            .collect();
+
+        let cid = "0".to_string();
+        let mut pci_fixups: HashMap<String, HashMap<pci::Address, pci::Address>> = HashMap::new();
+        pci_fixups.insert(cid.clone(), _pci_fixups);
+
+        let res = update_env_pci(&cid, &mut env, &pci_fixups);
+        assert!(res.is_ok(), "error: {}", res.err().unwrap());
+
+        // Non-PCI addresses should be left untouched
+        assert_eq!(env[0], "PCIDEVICE_NVIDIA_COM_BF_SF=mlx5_core.sf.10");
+        assert_eq!(
+            env[1],
+            "PCIDEVICE_NVIDIA_COM_BF_SF_INFO={\"mlx5_core.sf.10\":{}}"
+        );
+        // Real PCI addresses should still be translated
+        assert_eq!(env[2], "PCIDEVICE_REAL=0000:01:01.0");
+    }
+
+    #[test]
     fn test_pcipath_to_sysfs() {
         let testdir = tempdir().expect("failed to create tmpdir");
         let rootbuspath = testdir.path().to_str().unwrap();
@@ -1119,7 +1165,7 @@ mod tests {
 
         // Create mock sysfs files to indicate that 0000:00:02.0 is a bridge to bus 01
         let bridge2bus = "0000:01";
-        let bus2path = format!("{}/pci_bus/{}", bridge2path, bridge2bus);
+        let bus2path = format!("{bridge2path}/pci_bus/{bridge2bus}");
 
         fs::create_dir_all(bus2path).unwrap();
 
@@ -1133,9 +1179,9 @@ mod tests {
         assert!(relpath.is_err());
 
         // Create mock sysfs files for a bridge at 0000:01:03.0 to bus 02
-        let bridge3path = format!("{}/0000:01:03.0", bridge2path);
+        let bridge3path = format!("{bridge2path}/0000:01:03.0");
         let bridge3bus = "0000:02";
-        let bus3path = format!("{}/pci_bus/{}", bridge3path, bridge3bus);
+        let bus3path = format!("{bridge3path}/pci_bus/{bridge3bus}");
 
         fs::create_dir_all(bus3path).unwrap();
 
@@ -1154,9 +1200,11 @@ mod tests {
     // test
     async fn example_get_device_name(
         sandbox: &Arc<Mutex<Sandbox>>,
+        root_complex: &str,
         relpath: &str,
     ) -> Result<String> {
-        let matcher = crate::device::block_device_handler::VirtioBlkPciMatcher::new(relpath);
+        let matcher =
+            crate::device::block_device_handler::VirtioBlkPciMatcher::new(relpath, root_complex);
 
         let uev = wait_for_uevent(sandbox, matcher).await?;
 
@@ -1166,9 +1214,10 @@ mod tests {
     #[tokio::test]
     async fn test_get_device_name() {
         let devname = "vda";
-        let root_bus = create_pci_root_bus_path();
+        let root_complex = "00";
+        let root_bus = create_pci_root_bus_path(root_complex);
         let relpath = "/0000:00:0a.0/0000:03:0b.0";
-        let devpath = format!("{}{}/virtio4/block/{}", root_bus, relpath, devname);
+        let devpath = format!("{root_bus}{relpath}/virtio4/block/{devname}");
 
         let mut uev = crate::uevent::Uevent::default();
         uev.action = crate::linux_abi::U_EVENT_ACTION_ADD.to_string();
@@ -1183,7 +1232,7 @@ mod tests {
         sb.uevent_map.insert(devpath.clone(), uev);
         drop(sb); // unlock
 
-        let name = example_get_device_name(&sandbox, relpath).await;
+        let name = example_get_device_name(&sandbox, root_complex, relpath).await;
         assert!(name.is_ok(), "{}", name.unwrap_err());
         assert_eq!(name.unwrap(), devname);
 
@@ -1193,7 +1242,7 @@ mod tests {
 
         spawn_test_watcher(sandbox.clone(), uev);
 
-        let name = example_get_device_name(&sandbox, relpath).await;
+        let name = example_get_device_name(&sandbox, root_complex, relpath).await;
         assert!(name.is_ok(), "{}", name.unwrap_err());
         assert_eq!(name.unwrap(), devname);
     }
@@ -1271,7 +1320,7 @@ mod tests {
             cdi_timeout,
         )
         .await;
-        println!("modfied spec {:?}", spec);
+        println!("modfied spec {spec:?}");
         assert!(res.is_ok(), "{}", res.err().unwrap());
 
         let linux = spec.linux().as_ref().unwrap();

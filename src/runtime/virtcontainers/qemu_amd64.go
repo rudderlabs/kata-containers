@@ -38,6 +38,8 @@ type qemuAmd64 struct {
 	snpIdBlock string
 
 	snpIdAuth string
+
+	snpGuestPolicy *uint64
 }
 
 const (
@@ -95,10 +97,7 @@ func newQemuArch(config HypervisorConfig) (qemuArch, error) {
 		return nil, fmt.Errorf("unrecognised machinetype: %v", machineType)
 	}
 
-	factory := false
-	if config.BootToBeTemplate || config.BootFromTemplate {
-		factory = true
-	}
+	factory := config.BootToBeTemplate || config.BootFromTemplate
 
 	// IOMMU and Guest Protection require a split IRQ controller for handling interrupts
 	// otherwise QEMU won't be able to create the kernel irqchip
@@ -126,11 +125,12 @@ func newQemuArch(config HypervisorConfig) (qemuArch, error) {
 			protection:           noneProtection,
 			legacySerial:         config.LegacySerial,
 		},
-		vmFactory:  factory,
-		snpGuest:   config.SevSnpGuest,
-		qgsPort:    config.QgsPort,
-		snpIdBlock: config.SnpIdBlock,
-		snpIdAuth:  config.SnpIdAuth,
+		vmFactory:      factory,
+		snpGuest:       config.SevSnpGuest,
+		qgsPort:        config.QgsPort,
+		snpIdBlock:     config.SnpIdBlock,
+		snpIdAuth:      config.SnpIdAuth,
+		snpGuestPolicy: config.SnpGuestPolicy,
 	}
 
 	if config.ConfidentialGuest {
@@ -138,9 +138,9 @@ func newQemuArch(config HypervisorConfig) (qemuArch, error) {
 			return nil, err
 		}
 
-		if !q.qemuArchBase.disableNvdimm {
+		if !q.disableNvdimm {
 			hvLogger.WithField("subsystem", "qemuAmd64").Warn("Nvdimm is not supported with confidential guest, disabling it.")
-			q.qemuArchBase.disableNvdimm = true
+			q.disableNvdimm = true
 		}
 	}
 
@@ -315,6 +315,7 @@ func (q *qemuAmd64) appendProtectionDevice(devices []govmmQemu.Device, firmware,
 			CBitPos:         cpuid.AMDMemEncrypt.CBitPosition,
 			ReducedPhysBits: 1,
 			InitdataDigest:  initdataDigest,
+			SnpGuestPolicy:  q.snpGuestPolicy,
 		}
 		if q.snpIdBlock != "" && q.snpIdAuth != "" {
 			obj.SnpIdBlock = q.snpIdBlock

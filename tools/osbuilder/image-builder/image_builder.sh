@@ -4,7 +4,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-[ -z "${DEBUG}" ] || set -x
+[[ -z "${DEBUG}" ]] || set -x
 
 set -o errexit
 # set -o nounset
@@ -20,12 +20,14 @@ BUILDX=""
 PLATFORM=""
 TARGET_ARCH=${TARGET_ARCH:-$(uname -m)}
 ARCH=${ARCH:-$(uname -m)}
-[ "${TARGET_ARCH}" == "aarch64" ] && TARGET_ARCH=arm64
+[[ "${TARGET_ARCH}" == "aarch64" ]] && TARGET_ARCH=arm64
 TARGET_OS=${TARGET_OS:-linux}
-[ "${CROSS_BUILD}" == "true" ] && BUILDX=buildx && PLATFORM="--platform=${TARGET_OS}/${TARGET_ARCH}"
+[[ "${CROSS_BUILD}" == "true" ]] && BUILDX=buildx && PLATFORM="--platform=${TARGET_OS}/${TARGET_ARCH}"
+BUILD_VARIANT=${BUILD_VARIANT:-}
 
 readonly script_name="${0##*/}"
-readonly script_dir=$(dirname "$(readlink -f "$0")")
+script_dir=$(dirname "$(readlink -f "$0")")
+readonly script_dir
 readonly lib_file="${script_dir}/../scripts/lib.sh"
 
 readonly ext4_format="ext4"
@@ -56,6 +58,7 @@ SELINUX=${SELINUX:-no}
 SELINUXFS="/sys/fs/selinux"
 
 # shellcheck source=../scripts/lib.sh
+# shellcheck disable=SC1091
 source "${lib_file}"
 
 usage() {
@@ -130,13 +133,14 @@ build_with_container() {
 	image_name=$(basename "${image}")
 
 	engine_build_args=""
-	if [ -n "${IMAGE_REGISTRY}" ]; then
+	if [[ -n "${IMAGE_REGISTRY}" ]]; then
 		engine_build_args+=" --build-arg IMAGE_REGISTRY=${IMAGE_REGISTRY}"
 	fi
-	if [ -n "${USE_PODMAN}" ]; then
+	if [[ -n "${USE_PODMAN}" ]]; then
 		engine_build_args+=" --runtime ${DOCKER_RUNTIME}"
 	fi
 
+	# shellcheck disable=SC2154,SC2086,SC2248
 	"${container_engine}" ${BUILDX} build ${PLATFORM}  \
 		   ${engine_build_args} \
 		   --build-arg http_proxy="${http_proxy}" \
@@ -144,12 +148,12 @@ build_with_container() {
 		   -t "${container_image_name}" "${script_dir}"
 
 	readonly mke2fs_conf="/etc/mke2fs.conf"
-	if [ -f "${mke2fs_conf}" ]; then
+	if [[ -f "${mke2fs_conf}" ]]; then
 		shared_files+="-v ${mke2fs_conf}:${mke2fs_conf}:ro "
 	fi
 
-	if [ "${SELINUX}" == "yes" ]; then
-		if mountpoint $SELINUXFS > /dev/null; then
+	if [[ "${SELINUX}" == "yes" ]]; then
+		if mountpoint "${SELINUXFS}" > /dev/null; then
 			selinuxfs="-v ${SELINUXFS}:${SELINUXFS}"
 		else
 			die "Make sure that SELinux is enabled on the host"
@@ -159,6 +163,7 @@ build_with_container() {
 	#Make sure we use a compatible runtime to build rootfs
 	# In case Clear Containers Runtime is installed we dont want to hit issue:
 	#https://github.com/clearcontainers/runtime/issues/828
+	# shellcheck disable=SC2086
 	"${container_engine}" run  \
 		   --rm \
 		   --runtime "${DOCKER_RUNTIME}"  \
@@ -177,6 +182,7 @@ build_with_container() {
 		   --env USER="$(id -u)" \
 		   --env GROUP="$(id -g)" \
 		   --env IMAGE_SIZE_ALIGNMENT_MB="${IMAGE_SIZE_ALIGNMENT_MB}" \
+		   --env BUILD_VARIANT="${BUILD_VARIANT}" \
 		   -v /dev:/dev \
 		   -v "${script_dir}":"/osbuilder" \
 		   -v "${script_dir}/../scripts":"/scripts" \
@@ -184,19 +190,19 @@ build_with_container() {
 		   -v "${image_dir}":"/image" \
 		   ${selinuxfs} \
 		   ${shared_files} \
-		   ${container_image_name} \
+		   "${container_image_name}" \
 		   bash "/osbuilder/${script_name}" -o "/image/${image_name}" /rootfs
 }
 
 check_rootfs() {
 	local rootfs="${1}"
 
-	[ -d "${rootfs}" ] || die "${rootfs} is not a directory"
+	[[ -d "${rootfs}" ]] || die "${rootfs} is not a directory"
 
 	# The kata rootfs image expect init and kata-agent to be installed
 	init_path="/sbin/init"
 	init="${rootfs}${init_path}"
-	if [ ! -x "${init}" ] && [ ! -L "${init}" ]; then
+	if [[ ! -x "${init}" ]] && [[ ! -L "${init}" ]]; then
 		error "${init_path} is not installed in ${rootfs}"
 		return 1
 	fi
@@ -208,14 +214,21 @@ check_rootfs() {
 	# check agent or systemd
 	case "${AGENT_INIT}" in
 		"no")
-			for systemd_path in $candidate_systemd_paths; do
+			# Check if we have alternative init systems installed
+			# For now check if we have NVRC
+			if readlink "${rootfs}/sbin/init" | grep -q "NVRC"; then
+				OK "init is NVRC"
+				return 0
+			fi
+
+			for systemd_path in ${candidate_systemd_paths}; do
 				systemd="${rootfs}${systemd_path}"
-				if [ -x "${systemd}" ] || [ -L "${systemd}" ]; then
+				if [[ -x "${systemd}" ]] || [[ -L "${systemd}" ]]; then
 					found="yes"
 					break
 				fi
 			done
-			if [ ! $found ]; then
+			if [[ ! "${found}" ]]; then
 				error "None of ${candidate_systemd_paths} is installed in ${rootfs}"
 				return 1
 			fi
@@ -225,14 +238,14 @@ check_rootfs() {
 		"yes")
 			agent_path="/sbin/init"
 			agent="${rootfs}${agent_path}"
-			if  [ ! -x "${agent}" ]; then
+			if  [[ ! -x "${agent}" ]]; then
 				error "${agent_path} is not installed in ${rootfs}. Use AGENT_BIN env variable to change the expected agent binary name"
 				return 1
 			fi
 			# checksum must be different to system
-			for systemd_path in $candidate_systemd_paths; do
+			for systemd_path in ${candidate_systemd_paths}; do
 				systemd="${rootfs}${systemd_path}"
-				if [ -f "${systemd}" ] && cmp -s "${systemd}" "${agent}"; then
+				if [[ -f "${systemd}" ]] && cmp -s "${systemd}" "${agent}"; then
 					error "The agent is not the init process. ${agent_path} is systemd"
 					return 1
 				fi
@@ -255,13 +268,19 @@ calculate_required_disk_size() {
 	local fs_type="$2"
 	local block_size="$3"
 
-	readonly rootfs_size_mb=$(du -B 1M -s "${rootfs}" | awk '{print $1}')
-	readonly image="$(mktemp)"
-	readonly mount_dir="$(mktemp -d)"
+	local rootfs_size_mb
+	rootfs_size_mb=$(du -B 1M -s "${rootfs}" | awk '{print $1}')
+	readonly rootfs_size_mb
+	local image
+	image="$(mktemp)"
+	readonly image
+	local mount_dir
+	mount_dir="$(mktemp -d)"
+	readonly mount_dir
 	readonly max_tries=20
 	readonly increment=10
 
-	for i in $(seq 1 $max_tries); do
+	for i in $(seq 1 "${max_tries}"); do
 		local img_size="$((rootfs_size_mb + (i * increment)))"
 		create_disk "${image}" "${img_size}" "${fs_type}" "${rootfs_start}" > /dev/null 2>&1
 		if ! device="$(setup_loop_device "${image}")"; then
@@ -276,7 +295,7 @@ calculate_required_disk_size() {
 		umount "${mount_dir}"
 		losetup -d "${device}"
 
-		if [ "${avail}" -gt "${rootfs_size_mb}" ]; then
+		if [[ "${avail}" -gt "${rootfs_size_mb}" ]]; then
 			rmdir "${mount_dir}"
 			rm -f "${image}"
 			echo "${img_size}"
@@ -303,13 +322,13 @@ calculate_img_size() {
 	disk_size="$(calculate_required_disk_size "${rootfs}" "${fs_type}" "${block_size}")"
 
 	img_size="$((disk_size + reserved_size_mb))"
-	if [ -n "${root_free_space_mb}" ]; then
+	if [[ -n "${root_free_space_mb}" ]]; then
 		img_size="$((img_size + root_free_space_mb))"
 	fi
 
-	remaining="$((img_size % ${IMAGE_SIZE_ALIGNMENT_MB}))"
-	if [ "${remaining}" != "0" ]; then
-		img_size=$((img_size + ${IMAGE_SIZE_ALIGNMENT_MB} - remaining))
+	remaining="$((img_size % IMAGE_SIZE_ALIGNMENT_MB))"
+	if [[ "${remaining}" != "0" ]]; then
+		img_size=$((img_size + IMAGE_SIZE_ALIGNMENT_MB - remaining))
 	fi
 
 	echo "${img_size}"
@@ -326,7 +345,7 @@ setup_loop_device() {
 	partprobe -s "${device}" > /dev/null
 	# Poll for the block device p1
 	for _ in $(seq 1 5); do
-		if [ -b "${device}p1" ]; then
+		if [[ -b "${device}p1" ]]; then
 			echo "${device}"
 			return 0
 		fi
@@ -382,15 +401,15 @@ create_disk() {
 	# The partition is the rootfs content
 	info "Creating partitions"
 
-	if [ "${rootfs_end}" == "-1" ]; then
+	if [[ "${rootfs_end}" == "-1" ]]; then
 		rootfs_end_unit="s"
 	else
 		rootfs_end_unit="MiB"
 	fi
-	if [ "${MEASURED_ROOTFS}" == "yes" ]; then
+	if [[ "${MEASURED_ROOTFS}" == "yes" ]]; then
 		info "Creating partitions with hash device"
 		# The hash data will take less than one percent disk space to store
-		hash_start=$(echo $img_size | awk '{print $1 * 0.99}' |cut -d $(locale decimal_point) -f 1)
+		hash_start=$(echo "${img_size}" | awk '{print $1 * 0.99}' |cut -d "$(locale decimal_point)" -f 1)
 		partition_param="mkpart primary ${fs_type} ${part_start}MiB ${hash_start}MiB "
 		partition_param+="mkpart primary ${fs_type} ${hash_start}MiB ${rootfs_end}${rootfs_end_unit} "
 		partition_param+="set 1 boot on"
@@ -409,18 +428,18 @@ setup_selinux() {
 		local mount_dir="$1"
 		local agent_bin="$2"
 
-		if [ "${SELINUX}" == "yes" ]; then
-			if [ "${AGENT_INIT}" == "yes" ]; then
+		if [[ "${SELINUX}" == "yes" ]]; then
+			if [[ "${AGENT_INIT}" == "yes" ]]; then
 				die "Guest SELinux with the agent init is not supported yet"
 			fi
 
 			info "Labeling rootfs for SELinux"
 			selinuxfs_path="${mount_dir}${SELINUXFS}"
-			mkdir -p "$selinuxfs_path"
-			if mountpoint $SELINUXFS > /dev/null && \
+			mkdir -p "${selinuxfs_path}"
+			if mountpoint "${SELINUXFS}" > /dev/null && \
 				chroot "${mount_dir}" command -v restorecon > /dev/null; then
-				mount -t selinuxfs selinuxfs "$selinuxfs_path"
-				chroot "${mount_dir}" restorecon -RF -e ${SELINUXFS} /
+				mount -t selinuxfs selinuxfs "${selinuxfs_path}"
+				chroot "${mount_dir}" restorecon -RF -e "${SELINUXFS}" /
 				umount "${selinuxfs_path}"
 			else
 				die "Could not label the rootfs. Make sure that SELinux is enabled on the host \
@@ -453,7 +472,8 @@ create_rootfs_image() {
 	fi
 
 	info "Mounting root partition"
-	local mount_dir=$(mktemp -p "${TMPDIR:-/tmp}" -d osbuilder-mount-dir.XXXX)
+	local mount_dir
+	mount_dir=$(mktemp -p "${TMPDIR:-/tmp}" -d osbuilder-mount-dir.XXXX)
 	mount "${device}p1" "${mount_dir}"
 	OK "root partition mounted"
 
@@ -473,14 +493,53 @@ create_rootfs_image() {
 	umount "${mount_dir}"
 	OK "Root partition unmounted"
 
-	if [ "${fs_type}" = "${ext4_format}" ]; then
+	if [[ "${fs_type}" = "${ext4_format}" ]]; then
 		fsck.ext4 -D -y "${device}p1"
 	fi
 
-	if [ "${MEASURED_ROOTFS}" == "yes" ] && [ -b "${device}p2" ]; then
+	if [[ "${MEASURED_ROOTFS}" == "yes" ]] && [[ -b "${device}p2" ]]; then
 		info "veritysetup format rootfs device: ${device}p1, hash device: ${device}p2"
-		local image_dir=$(dirname "${image}")
-		veritysetup format "${device}p1" "${device}p2" > "${image_dir}"/root_hash.txt 2>&1
+		local -r image_dir=$(dirname "${image}")
+		local verity_output
+		verity_output=$(veritysetup format --no-superblock "${device}p1" "${device}p2" 2>&1)
+		build_kernel_verity_params() {
+			local -r output="$1"
+			local root_hash
+			local salt
+			local data_blocks
+			local data_block_size
+			local hash_block_size
+
+			read_verity_field() {
+				local -r label="$1"
+				local value
+
+				value=$(printf '%s\n' "${output}" | sed -n "s/^${label}:[[:space:]]*//p")
+				value="${value// \[*/}"
+				[[ -n "${value}" ]] || die "Missing '${label}' in verity output for ${image}"
+
+				echo "${value}"
+			}
+
+			root_hash=$(read_verity_field "Root hash")
+			salt=$(read_verity_field "Salt")
+			data_blocks=$(read_verity_field "Data blocks")
+			data_block_size=$(read_verity_field "Data block size")
+			hash_block_size=$(read_verity_field "Hash block size")
+
+			printf 'root_hash=%s,salt=%s,data_blocks=%s,data_block_size=%s,hash_block_size=%s' \
+				"${root_hash}" \
+				"${salt}" \
+				"${data_blocks}" \
+				"${data_block_size}" \
+				"${hash_block_size}"
+		}
+
+		local kernel_verity_params
+		kernel_verity_params="$(build_kernel_verity_params "${verity_output}")"
+
+		printf '%s\n' "${kernel_verity_params}" > "${image_dir}"/root_hash_"${BUILD_VARIANT}".txt
+		OK "Root hash file created for variant: ${BUILD_VARIANT}"
 	fi
 
 	losetup -d "${device}"
@@ -493,7 +552,7 @@ create_erofs_rootfs_image() {
 	local block_size="$3"
 	local agent_bin="$4"
 
-	if [ "$block_size" -ne 4096 ]; then
+	if [[ "${block_size}" -ne 4096 ]]; then
 		die "Invalid block size for erofs"
 	fi
 
@@ -501,7 +560,8 @@ create_erofs_rootfs_image() {
 		die "Could not setup loop device"
 	fi
 
-	local mount_dir=$(mktemp -p "${TMPDIR:-/tmp}" -d osbuilder-mount-dir.XXXX)
+	local mount_dir
+	mount_dir=$(mktemp -p "${TMPDIR:-/tmp}" -d osbuilder-mount-dir.XXXX)
 
 	info "Copying content from rootfs to root partition"
 	cp -a "${rootfs}"/* "${mount_dir}"
@@ -515,10 +575,10 @@ create_erofs_rootfs_image() {
 	info "Setup systemd"
 	setup_systemd "${mount_dir}"
 
-	readonly fsimage="$(mktemp)"
+	local -r fsimage="$(mktemp)"
 	mkfs.erofs -Enoinline_data "${fsimage}" "${mount_dir}"
-	local img_size="$(stat -c"%s" "${fsimage}")"
-	local img_size_mb="$(((("${img_size}" + 1048576) / 1048576) + 1 + "${rootfs_start}"))"
+	local -r img_size="$(stat -c"%s" "${fsimage}")"
+	local -r img_size_mb="$(((("${img_size}" + 1048576) / 1048576) + 1 + "${rootfs_start}"))"
 
 	create_disk "${image}" "${img_size_mb}" "ext4" "${rootfs_start}"
 
@@ -549,9 +609,10 @@ set_dax_header() {
 	info "Set DAX metadata"
 	# Set metadata header
 	# Issue: https://github.com/kata-containers/osbuilder/issues/240
-	if [ -z "${nsdax_bin}" ] ; then
+	if [[ -z "${nsdax_bin}" ]] ; then
 		nsdax_bin="${script_dir}/nsdax"
 		gcc -O2 "${script_dir}/nsdax.gpl.c" -o "${nsdax_bin}"
+		# shellcheck disable=SC2064
 		trap "rm ${nsdax_bin}" EXIT
 	fi
 	"${nsdax_bin}" "${header_image}" "${dax_header_bytes}" "${dax_alignment_bytes}"
@@ -581,7 +642,7 @@ main() {
 
 	while getopts "ho:r:f:" opt
 	do
-		case "$opt" in
+		case "${opt}" in
 			h)	usage; return 0;;
 			o)	image="${OPTARG}" ;;
 			r)	root_free_space="${OPTARG}" ;;
@@ -592,19 +653,19 @@ main() {
 
 	shift $(( OPTIND - 1 ))
 	rootfs="$(readlink -f "$1")"
-	if [ -z "${rootfs}" ]; then
+	if [[ -z "${rootfs}" ]]; then
 		usage
 		exit 0
 	fi
 
 	local container_engine
-	if [ -n "${USE_DOCKER}" ]; then
+	if [[ -n "${USE_DOCKER}" ]]; then
 		container_engine="docker"
-	elif [ -n "${USE_PODMAN}" ]; then
+	elif [[ -n "${USE_PODMAN}" ]]; then
 		container_engine="podman"
 	fi
 
-	if [ -n "$container_engine" ]; then
+	if [[ -n "${container_engine}" ]]; then
 		build_with_container "${rootfs}" \
 			"${image}" "${fs_type}" "${block_size}" \
 			"${root_free_space}" "${agent_bin}" \
@@ -617,7 +678,7 @@ main() {
 		die "Invalid rootfs"
 	fi
 
-	if [ "${fs_type}" == 'erofs' ]; then
+	if [[ "${fs_type}" == 'erofs' ]]; then
 		# mkfs.erofs accepts an src root dir directory as an input
 		# rather than some device, so no need to guess the device dest size first.
 		create_erofs_rootfs_image "${rootfs}" "${image}" \
@@ -637,6 +698,7 @@ main() {
 	# insert at the beginning of the image the MBR + DAX header
 	set_dax_header "${image}" "${img_size}" "${fs_type}" "${nsdax_bin}"
 
+	# shellcheck disable=SC2154
 	chown "${USER}:${GROUP}" "${image}"
 }
 

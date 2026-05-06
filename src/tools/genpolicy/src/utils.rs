@@ -5,6 +5,7 @@
 
 use crate::layers_cache;
 use crate::settings;
+use anyhow::Context;
 use clap::Parser;
 
 #[derive(Debug, Parser)]
@@ -41,7 +42,7 @@ struct CommandLineOptions {
         short = 'j',
         long,
         default_value_t = String::from("genpolicy-settings.json"),
-        help = "Path to genpolicy settings file"
+        help = "Path to genpolicy settings file or directory (with genpolicy-settings.json and optional genpolicy-settings.d/*.json)"
     )]
     json_settings_path: String,
 
@@ -105,6 +106,9 @@ struct CommandLineOptions {
     layers_cache_file_path: Option<String>,
     #[clap(short, long, help = "Print version information and exit")]
     version: bool,
+
+    #[clap(long, help = "Path to the initdata TOML file", require_equals = true)]
+    initdata_path: Option<String>,
 }
 
 /// Application configuration, derived from on command line parameters.
@@ -126,6 +130,7 @@ pub struct Config {
     pub containerd_socket_path: Option<String>,
     pub layers_cache: layers_cache::ImageLayersCache,
     pub version: bool,
+    pub initdata: kata_types::initdata::InitData,
 }
 
 impl Config {
@@ -150,6 +155,18 @@ impl Config {
 
         let settings = settings::Settings::new(&args.json_settings_path);
 
+        let initdata = match args.initdata_path.as_deref() {
+            Some(p) => {
+                let s = std::fs::read_to_string(p)
+                    .context(format!("Failed to read initdata file {p}"))
+                    .unwrap();
+                kata_types::initdata::parse_initdata(&s)
+                    .context(format!("Failed to parse initdata from {p}"))
+                    .unwrap()
+            }
+            None => kata_types::initdata::InitData::new("sha256", "0.1.0"),
+        };
+
         Self {
             use_cache: args.use_cached_files,
             insecure_registries: args.insecure_registry,
@@ -164,6 +181,7 @@ impl Config {
             containerd_socket_path: args.containerd_socket_path,
             layers_cache: layers_cache::ImageLayersCache::new(&layers_cache_file_path),
             version: args.version,
+            initdata,
         }
     }
 }

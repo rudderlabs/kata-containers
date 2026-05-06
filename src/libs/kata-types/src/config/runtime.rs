@@ -9,7 +9,7 @@ use std::path::Path;
 use super::default;
 use crate::config::{ConfigOps, TomlConfig};
 use crate::mount::split_bind_mounts;
-use crate::{eother, validate_path};
+use crate::validate_path;
 
 #[path = "shared_mount.rs"]
 pub mod shared_mount;
@@ -100,6 +100,15 @@ pub struct Runtime {
     #[serde(default)]
     pub sandbox_cgroup_only: bool,
 
+    /// If enabled, each vCPU thread will be pinned to a fixed host CPU.
+    ///
+    /// Pinning is only applied when the number of vCPU threads equals
+    /// the number of CPUs in the sandbox's cpuset. When the counts
+    /// diverge (e.g. after hotplug or container removal), pinning is
+    /// reset so all vCPU threads float across the full cpuset.
+    #[serde(default)]
+    pub enable_vcpus_pinning: bool,
+
     /// If enabled, the runtime will create opentracing.io traces and spans.
     /// See https://www.jaegertracing.io/docs/getting-started.
     #[serde(default)]
@@ -127,6 +136,12 @@ pub struct Runtime {
     /// applied by the kata agent. If set to true, seccomp is not applied within the guest.
     #[serde(default)]
     pub disable_guest_seccomp: bool,
+
+    /// If enabled, the runtime will not create Kubernetes emptyDir mounts on the guest filesystem.
+    /// Instead, emptyDir mounts will be created on the host and shared via virtio-fs.
+    /// This is potentially slower, but allows sharing of files from host to guest.
+    #[serde(default)]
+    pub disable_guest_empty_dir: bool,
 
     /// Determines how VFIO devices should be be presented to the container.
     ///
@@ -192,7 +207,11 @@ impl ConfigOps for Runtime {
             // Split the bind mount, canonicalize the path and then append rw mode to it.
             let (real_path, mode) = split_bind_mounts(bind);
             match Path::new(real_path).canonicalize() {
-                Err(e) => return Err(eother!("sandbox bind mount `{}` is invalid: {}", bind, e)),
+                Err(e) => {
+                    return Err(std::io::Error::other(format!(
+                        "sandbox bind mount `{bind}` is invalid: {e}",
+                    )))
+                }
                 Ok(path) => {
                     *bind = format!("{}{}", path.display(), mode);
                 }
@@ -211,18 +230,16 @@ impl ConfigOps for Runtime {
             && net_model != "none"
             && net_model != "tcfilter"
         {
-            return Err(eother!(
-                "Invalid internetworking_model `{}` in configuration file",
-                net_model
-            ));
+            return Err(std::io::Error::other(format!(
+                "Invalid internetworking_model `{net_model}` in configuration file",
+            )));
         }
 
         let vfio_mode = &conf.runtime.vfio_mode;
         if !vfio_mode.is_empty() && vfio_mode != "vfio" && vfio_mode != "guest-kernel" {
-            return Err(eother!(
-                "Invalid vfio_mode `{}` in configuration file",
-                vfio_mode
-            ));
+            return Err(std::io::Error::other(format!(
+                "Invalid vfio_mode `{vfio_mode}` in configuration file",
+            )));
         }
 
         for shared_mount in &conf.runtime.shared_mounts {
@@ -334,6 +351,7 @@ internetworking_model = "macvtap"
 disable_new_netns = true
 sandbox_bind_mounts = []
 sandbox_cgroup_only = true
+enable_vcpus_pinning = true
 enable_tracing = true
 jaeger_endpoint = "localhost:1234"
 jaeger_user = "user"
@@ -354,6 +372,7 @@ field_should_be_ignored = true
         assert!(config.runtime.disable_new_netns);
         assert_eq!(config.runtime.sandbox_bind_mounts.len(), 0);
         assert!(config.runtime.sandbox_cgroup_only);
+        assert!(config.runtime.enable_vcpus_pinning);
         assert!(config.runtime.enable_tracing);
         assert!(config.runtime.is_experiment_enabled("a"));
         assert!(config.runtime.is_experiment_enabled("b"));

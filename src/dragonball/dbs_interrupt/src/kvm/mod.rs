@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
 use std::sync::{Arc, Mutex};
 
-use kvm_bindings::{kvm_irq_routing, kvm_irq_routing_entry};
+use kvm_bindings::{kvm_irq_routing_entry, KvmIrqRouting as KvmIrqRoutingWrapper};
 use kvm_ioctls::VmFd;
 
 use super::*;
@@ -75,13 +75,6 @@ impl KvmIrqManager {
         }
     }
 
-    /// Prepare the interrupt manager for generating interrupts into the target VM.
-    pub fn initialize(&self) -> Result<()> {
-        // Safe to unwrap because there's no legal way to break the mutex.
-        let mgr = self.mgr.lock().unwrap();
-        mgr.initialize()
-    }
-
     /// Set maximum supported MSI interrupts per device.
     pub fn set_max_msi_irqs(&self, max_msi_irqs: InterruptIndex) {
         let mut mgr = self.mgr.lock().unwrap();
@@ -90,6 +83,12 @@ impl KvmIrqManager {
 }
 
 impl InterruptManager for KvmIrqManager {
+    fn initialize(&self) -> Result<()> {
+        // Safe to unwrap because there's no legal way to break the mutex.
+        let mgr = self.mgr.lock().unwrap();
+        mgr.initialize()
+    }
+
     fn create_group(
         &self,
         ty: InterruptSourceType,
@@ -196,26 +195,18 @@ impl KvmIrqRouting {
     }
 
     fn set_routing(&self, routes: &HashMap<u64, kvm_irq_routing_entry>) -> Result<()> {
-        // Allocate enough buffer memory.
-        let elem_sz = std::mem::size_of::<kvm_irq_routing>();
-        let total_sz = std::mem::size_of::<kvm_irq_routing_entry>() * routes.len() + elem_sz;
-        let elem_cnt = total_sz.div_ceil(elem_sz);
-        let mut irq_routings = Vec::<kvm_irq_routing>::with_capacity(elem_cnt);
-        irq_routings.resize_with(elem_cnt, Default::default);
+        let mut irq_routing = KvmIrqRoutingWrapper::new(routes.len())
+            .map_err(|_| Error::other("Failed to create KvmIrqRouting"))?;
 
-        // Prepare the irq_routing header.
-        let irq_routing = &mut irq_routings[0];
-        irq_routing.nr = routes.len() as u32;
-        irq_routing.flags = 0;
-
-        // Safe because we have just allocated enough memory above.
-        let irq_routing_entries = unsafe { irq_routing.entries.as_mut_slice(routes.len()) };
-        for (idx, entry) in routes.values().enumerate() {
-            irq_routing_entries[idx] = *entry;
+        {
+            let irq_routing_entries = irq_routing.as_mut_slice();
+            for (idx, entry) in routes.values().enumerate() {
+                irq_routing_entries[idx] = *entry;
+            }
         }
 
         self.vm_fd
-            .set_gsi_routing(irq_routing)
+            .set_gsi_routing(&irq_routing)
             .map_err(from_sys_util_errno)?;
 
         Ok(())
@@ -271,6 +262,7 @@ pub fn from_sys_util_errno(e: vmm_sys_util::errno::Error) -> std::io::Error {
 pub(crate) mod tests {
     use super::*;
     use crate::manager::tests::create_vm_fd;
+    use test_utils::skip_if_kvm_unaccessable;
 
     fn create_irq_group(
         manager: Arc<KvmIrqManager>,
@@ -306,11 +298,13 @@ pub(crate) mod tests {
 
     #[test]
     fn test_create_kvm_irq_manager() {
+        skip_if_kvm_unaccessable!();
         let _ = create_kvm_irq_manager();
     }
 
     #[test]
     fn test_kvm_irq_manager_opt() {
+        skip_if_kvm_unaccessable!();
         let vmfd = Arc::new(create_vm_fd());
         vmfd.create_irq_chip().unwrap();
         let manager = Arc::new(KvmIrqManager::new(vmfd.clone()));

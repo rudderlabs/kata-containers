@@ -30,6 +30,7 @@ use nix::unistd::{self, dup, sync, Pid};
 use std::env;
 use std::ffi::OsStr;
 use std::fs::{self, File};
+use std::io::ErrorKind;
 use std::os::unix::fs::{self as unixfs, FileTypeExt};
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
@@ -109,8 +110,6 @@ const API_SERVER_PATH: &str = "/usr/local/bin/api-server-rest";
 /// Path of ocicrypt config file. This is used by CDH when decrypting image.
 /// TODO: remove this when we move the launch of CDH out of the kata-agent.
 const OCICRYPT_CONFIG_PATH: &str = "/etc/ocicrypt_config.json";
-
-const DEFAULT_LAUNCH_PROCESS_TIMEOUT: i32 = 6;
 
 lazy_static! {
     static ref AGENT_CONFIG: AgentConfig =
@@ -300,12 +299,12 @@ async fn real_main(init_mode: bool) -> std::result::Result<(), Box<dyn std::erro
         tracer::end_tracing();
     }
 
-    eprintln!("{} shutdown complete", NAME);
+    eprintln!("{NAME} shutdown complete");
 
     let mut wait_errors: Vec<tokio::task::JoinError> = vec![];
     for result in results {
         if let Err(e) = result {
-            eprintln!("wait task error: {:#?}", e);
+            eprintln!("wait task error: {e:#?}");
             wait_errors.push(e);
         }
     }
@@ -465,8 +464,17 @@ fn attestation_binaries_available(logger: &Logger, procs: &GuestComponentsProcs)
         _ => vec![],
     };
     for binary in binaries.iter() {
-        if !Path::new(binary).exists() {
-            warn!(logger, "{} not found", binary);
+        let exists = Path::new(binary)
+            .try_exists()
+            .unwrap_or_else(|error| match error.kind() {
+                ErrorKind::NotFound => {
+                    warn!(logger, "{} not found", binary);
+                    false
+                }
+                _ => panic!("Path existence check failed for '{}': {}", binary, error),
+            });
+
+        if !exists {
             return false;
         }
     }
@@ -495,7 +503,7 @@ async fn launch_guest_component_procs(
         aa_args,
         Some(AA_CONFIG_PATH),
         AA_ATTESTATION_SOCKET,
-        DEFAULT_LAUNCH_PROCESS_TIMEOUT,
+        config.launch_process_timeout.as_secs(),
         &[],
     )
     .await
@@ -517,7 +525,7 @@ async fn launch_guest_component_procs(
         vec![],
         Some(CDH_CONFIG_PATH),
         CDH_SOCKET,
-        DEFAULT_LAUNCH_PROCESS_TIMEOUT,
+        config.launch_process_timeout.as_secs(),
         &[("OCICRYPT_KEYPROVIDER_CONFIG", OCICRYPT_CONFIG_PATH)],
     )
     .await
@@ -577,7 +585,7 @@ async fn init_attestation_components(
     Ok(())
 }
 
-async fn wait_for_path_to_exist(logger: &Logger, path: &str, timeout_secs: i32) -> Result<()> {
+async fn wait_for_path_to_exist(logger: &Logger, path: &str, timeout_secs: u64) -> Result<()> {
     let p = Path::new(path);
     let mut attempts = 0;
     loop {
@@ -604,7 +612,7 @@ async fn launch_process(
     mut args: Vec<&str>,
     config: Option<&str>,
     unix_socket_path: &str,
-    timeout_secs: i32,
+    timeout_secs: u64,
     envs: &[(&str, &str)],
 ) -> Result<()> {
     if !Path::new(path).exists() {
@@ -736,7 +744,7 @@ mod tests {
                 skip_if_root!();
             }
 
-            let msg = format!("test[{}]: {:?}", i, d);
+            let msg = format!("test[{i}]: {d:?}");
             let (rfd, wfd) = unistd::pipe2(OFlag::O_CLOEXEC).unwrap();
             defer!({
                 // XXX: Never try to close rfd, because it will be closed by PipeStream in
@@ -749,7 +757,7 @@ mod tests {
             shutdown_tx.send(true).unwrap();
             let result = create_logger_task(rfd, d.vsock_port, shutdown_rx).await;
 
-            let msg = format!("{}, result: {:?}", msg, result);
+            let msg = format!("{msg}, result: {result:?}");
             assert_result!(d.result, result, msg);
         }
     }

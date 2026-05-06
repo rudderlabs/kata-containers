@@ -52,7 +52,7 @@ use std::time::Instant;
 
 use lazy_static::lazy_static;
 use nix::mount::{mount, MntFlags, MsFlags};
-use nix::{unistd, NixPath};
+use nix::unistd;
 use oci_spec::runtime as oci;
 
 use crate::fs::is_symlink;
@@ -177,7 +177,7 @@ pub fn get_linux_mount_info(mount_point: &str) -> Result<LinuxMountInfo> {
 ///
 /// To ensure security, the `create_mount_destination()` function takes an extra parameter `root`,
 /// which is used to ensure that `dst` is within the specified directory. And a safe version of
-/// `PathBuf` is returned to avoid TOCTTOU type of flaws.
+/// `PathBuf` is returned to avoid TOCTOU type of flaws.
 pub fn create_mount_destination<S: AsRef<Path>, D: AsRef<Path>, R: AsRef<Path>>(
     src: S,
     dst: D,
@@ -225,7 +225,7 @@ pub fn create_mount_destination<S: AsRef<Path>, D: AsRef<Path>, R: AsRef<Path>>(
 /// Caller needs to ensure safety of the `dst` to avoid possible file path based attacks.
 pub fn bind_remount<P: AsRef<Path>>(dst: P, readonly: bool) -> Result<()> {
     let dst = dst.as_ref();
-    if dst.is_empty() {
+    if dst.as_os_str().is_empty() {
         return Err(Error::NullMountPointPath);
     }
     let dst = dst
@@ -262,10 +262,10 @@ pub fn bind_mount_unchecked<S: AsRef<Path>, D: AsRef<Path>>(
 
     let src = src.as_ref();
     let dst = dst.as_ref();
-    if src.is_empty() {
+    if src.as_os_str().is_empty() {
         return Err(Error::NullMountPointPath);
     }
-    if dst.is_empty() {
+    if dst.as_os_str().is_empty() {
         return Err(Error::NullMountPointPath);
     }
     let abs_src = src
@@ -588,7 +588,7 @@ fn mount_at<P: AsRef<Path>>(
                 }
             }
         })?;
-    child.join().map_err(|e| Error::Join(format!("{:?}", e)))?;
+    child.join().map_err(|e| Error::Join(format!("{e:?}")))?;
 
     if !rx.load(Ordering::Acquire) {
         Err(Error::Mount(
@@ -760,7 +760,7 @@ pub fn umount_timeout<P: AsRef<Path>>(path: P, timeout: u64) -> Result<()> {
 /// # Safety
 /// Caller needs to ensure safety of the `path` to avoid possible file path based attacks.
 pub fn umount_all<P: AsRef<Path>>(mountpoint: P, lazy_umount: bool) -> Result<()> {
-    if mountpoint.as_ref().is_empty() || !mountpoint.as_ref().exists() {
+    if mountpoint.as_ref().as_os_str().is_empty() || !mountpoint.as_ref().exists() {
         return Ok(());
     }
 
@@ -823,11 +823,11 @@ mod tests {
 
     #[test]
     fn test_get_linux_mount_info() {
-        let info = get_linux_mount_info("/sys/fs/cgroup").unwrap();
+        let info = get_linux_mount_info("/dev/shm").unwrap();
 
         assert_eq!(&info.device, "tmpfs");
         assert_eq!(&info.fs_type, "tmpfs");
-        assert_eq!(&info.path, "/sys/fs/cgroup");
+        assert_eq!(&info.path, "/dev/shm");
 
         assert!(matches!(
             get_linux_mount_info(""),
@@ -1088,7 +1088,7 @@ mod tests {
         assert!(parse_mount_options(&options).is_err());
 
         let idx = options.len() - 1;
-        options[idx] = " ".repeat(4097);
+        options[idx] = " ".repeat(*MAX_MOUNT_PARAM_SIZE + 1);
         assert!(parse_mount_options(&options).is_err());
     }
 
