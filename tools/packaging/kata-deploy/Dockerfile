@@ -221,7 +221,9 @@ RUN \
 	esac
 
 #### kata-deploy main image
-FROM gcr.io/distroless/static-debian13@sha256:972618ca78034aaddc55864342014a96b85108c607372f7cbd0dbd1361f1d841
+FROM alpine:3.22@sha256:310c62b5e7ca5b08167e4384c68db0fd2905dd9c7493756d356e893909057601
+
+RUN apk add --no-cache bash
 
 ARG DESTINATION=/opt/kata-artifacts
 
