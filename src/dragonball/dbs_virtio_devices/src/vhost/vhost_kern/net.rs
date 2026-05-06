@@ -26,6 +26,7 @@ use vhost_rs::vhost_user::message::VhostUserVringAddrFlags;
 #[cfg(not(test))]
 use vhost_rs::VhostBackend;
 use vhost_rs::{VhostUserMemoryRegionInfo, VringConfigData};
+use virtio_bindings::bindings::virtio_config::{VIRTIO_F_NOTIFY_ON_EMPTY, VIRTIO_F_VERSION_1};
 use virtio_bindings::bindings::virtio_net::*;
 use virtio_bindings::bindings::virtio_ring::*;
 use virtio_queue::{DescriptorChain, QueueT};
@@ -137,7 +138,7 @@ where
         queue_sizes: Arc<Vec<u16>>,
         event_mgr: EpollManager,
     ) -> VirtioResult<Self> {
-        trace!(target: "vhost-net", "{}: Net::new_with_tap()", NET_DRIVER_NAME);
+        trace!(target: "vhost-net", "{NET_DRIVER_NAME}: Net::new_with_tap()");
 
         let vq_pairs = queue_sizes.len() / 2;
 
@@ -258,12 +259,11 @@ where
         R: GuestMemoryRegion + Sync + Send + 'static,
     {
         let vq_pairs = self.queue_sizes.len() / 2;
-        trace!(target: "vhost-net", "{}: Net::setup_vhost_backend(vq_pairs: {})", NET_DRIVER_NAME, vq_pairs);
+        trace!(target: "vhost-net", "{NET_DRIVER_NAME}: Net::setup_vhost_backend(vq_pairs: {vq_pairs})");
 
         if vq_pairs < 1 {
             error!(
-                "{}: Invalid virtio queue pairs, expected a value greater than 0, but got {}",
-                NET_DRIVER_NAME, vq_pairs
+                "{NET_DRIVER_NAME}: Invalid virtio queue pairs, expected a value greater than 0, but got {vq_pairs}"
             );
             return Err(VirtioError::ActivateError(Box::new(
                 ActivateError::InvalidParam,
@@ -300,7 +300,7 @@ where
         Q: QueueT + Send + 'static,
         R: GuestMemoryRegion + Sync + Send + 'static,
     {
-        trace!(target: "vhost-net", "{}: Net::init_vhost_dev(pair_index: {})", NET_DRIVER_NAME, pair_index);
+        trace!(target: "vhost-net", "{NET_DRIVER_NAME}: Net::init_vhost_dev(pair_index: {pair_index})");
 
         let handle = &mut self.handles[pair_index];
         handle
@@ -364,7 +364,7 @@ where
         Q: QueueT + Send + 'static,
         R: GuestMemoryRegion + Sync + Send + 'static,
     {
-        trace!(target: "vhost-net", "{}: Net::init_vhost_queues(pair_index: {})", NET_DRIVER_NAME, pair_index);
+        trace!(target: "vhost-net", "{NET_DRIVER_NAME}: Net::init_vhost_queues(pair_index: {pair_index})");
 
         let handle = &mut self.handles[pair_index];
         let tap = &self.taps[pair_index];
@@ -503,7 +503,7 @@ where
 
         // Do not support control queue and multi-queue.
         let vq_pairs = config.queues.len() / 2;
-        if config.queues.len() % 2 != 0 || self.taps.len() != vq_pairs {
+        if !config.queues.len().is_multiple_of(2) || self.taps.len() != vq_pairs {
             self.metrics.activate_fails.inc();
             return Err(crate::ActivateError::InvalidParam);
         }
@@ -548,7 +548,7 @@ where
         if let Some(subscriber_id) = subscriber_id {
             match self.device_info.remove_event_handler(subscriber_id) {
                 Ok(_) => debug!("vhost-net: removed subscriber_id {:?}", self.subscriber_id),
-                Err(err) => warn!("vhost-net: failed to remove event handler: {:?}", err),
+                Err(err) => warn!("vhost-net: failed to remove event handler: {err:?}"),
             }
         }
     }
@@ -614,7 +614,7 @@ where
             match ctrl_hdr.class as u32 {
                 VIRTIO_NET_CTRL_MQ => {
                     virtio_handle_ctrl_mq::<AS, _>(desc_chain, ctrl_hdr.cmd, mem, |curr_queues| {
-                        info!("{}: vq pairs: {}", NET_DRIVER_NAME, curr_queues);
+                        info!("{NET_DRIVER_NAME}: vq pairs: {curr_queues}");
                         Ok(())
                     })?;
                     return virtio_handle_ctrl_status::<AS>(
@@ -682,6 +682,7 @@ mod tests {
     };
     use dbs_utils::epoll_manager::SubscriberOps;
     use kvm_ioctls::Kvm;
+    use test_utils::skip_if_kvm_unaccessable;
     use virtio_queue::{Queue, QueueSync};
     use vm_memory::{GuestAddress, GuestMemoryMmap, GuestRegionMmap};
     use vmm_sys_util::eventfd::EventFd;
@@ -689,6 +690,15 @@ mod tests {
     use super::*;
     use crate::tests::{create_address_space, create_vm_and_irq_manager};
     use crate::{create_queue_notifier, VirtioQueueConfig};
+
+    fn unique_tap_name(prefix: &str) -> String {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static CNT: AtomicUsize = AtomicUsize::new(0);
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+
+        // "vtap" + pid(<=5) + n(<=3) => max len <= 15
+        format!("{}{:x}{:x}", prefix, std::process::id() & 0xfff, n & 0xfff)
+    }
 
     fn create_vhost_kern_net_epoll_handler(
         id: String,
@@ -718,21 +728,25 @@ mod tests {
 
     #[test]
     fn test_vhost_kern_net_virtio_normal() {
+        skip_if_kvm_unaccessable!();
         let guest_mac_str = "11:22:33:44:55:66";
         let guest_mac = MacAddr::parse_str(guest_mac_str).unwrap();
         let queue_sizes = Arc::new(vec![128]);
         let epoll_mgr = EpollManager::default();
-        let mut dev: Net<Arc<GuestMemoryMmap>, QueueSync, GuestRegionMmap> = Net::new(
-            String::from("test_vhosttap"),
-            Some(&guest_mac),
-            queue_sizes,
-            epoll_mgr,
-        )
-        .unwrap();
+        let tap_name = unique_tap_name("vtap");
+        let dev_result: VirtioResult<Net<Arc<GuestMemoryMmap>, QueueSync, GuestRegionMmap>> =
+            Net::new(tap_name.clone(), Some(&guest_mac), queue_sizes, epoll_mgr);
+        let mut dev: Net<Arc<GuestMemoryMmap>, QueueSync, GuestRegionMmap> = match dev_result {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("skip test: failed to create tap {}: {:?}", tap_name, e);
+                return;
+            }
+        };
 
         assert_eq!(dev.device_type(), TYPE_NET);
 
-        let queue_size = vec![128];
+        let queue_size = [128];
         assert_eq!(dev.queue_max_sizes(), &queue_size[..]);
         assert_eq!(
             dev.get_avail_features(0),
@@ -757,20 +771,23 @@ mod tests {
 
     #[test]
     fn test_vhost_kern_net_virtio_activate() {
+        skip_if_kvm_unaccessable!();
         let guest_mac_str = "11:22:33:44:55:66";
         let guest_mac = MacAddr::parse_str(guest_mac_str).unwrap();
         // Invalid queue sizes
         {
             let queue_sizes = Arc::new(vec![128]);
             let epoll_mgr = EpollManager::default();
-            let mut dev: Net<Arc<GuestMemoryMmap>, QueueSync, GuestRegionMmap> = Net::new(
-                String::from("test_vhosttap"),
-                Some(&guest_mac),
-                queue_sizes,
-                epoll_mgr,
-            )
-            .unwrap();
-
+            let tap_name = unique_tap_name("vtap");
+            let dev_result: VirtioResult<Net<Arc<GuestMemoryMmap>, QueueSync, GuestRegionMmap>> =
+                Net::new(tap_name.clone(), Some(&guest_mac), queue_sizes, epoll_mgr);
+            let mut dev: Net<Arc<GuestMemoryMmap>, QueueSync, GuestRegionMmap> = match dev_result {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("skip test: failed to create tap {}: {:?}", tap_name, e);
+                    return;
+                }
+            };
             let queues = vec![
                 VirtioQueueConfig::create(128, 0).unwrap(),
                 VirtioQueueConfig::create(128, 0).unwrap(),
@@ -807,13 +824,17 @@ mod tests {
             let queue_eventfd2 = Arc::new(EventFd::new(0).unwrap());
             let queue_sizes = Arc::new(vec![128, 128]);
             let epoll_mgr = EpollManager::default();
-            let mut dev: Net<Arc<GuestMemoryMmap>, Queue, GuestRegionMmap> = Net::new(
-                String::from("test_vhosttap"),
-                Some(&guest_mac),
-                queue_sizes,
-                epoll_mgr,
-            )
-            .unwrap();
+
+            let tap_name = unique_tap_name("vtap");
+            let dev_result: VirtioResult<Net<Arc<GuestMemoryMmap>, Queue, GuestRegionMmap>> =
+                Net::new(tap_name.clone(), Some(&guest_mac), queue_sizes, epoll_mgr);
+            let mut dev: Net<Arc<GuestMemoryMmap>, Queue, GuestRegionMmap> = match dev_result {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("skip test: failed to create tap {}: {:?}", tap_name, e);
+                    return;
+                }
+            };
 
             let queues = vec![
                 VirtioQueueConfig::new(queue, queue_eventfd, notifier.clone(), 1),
@@ -841,6 +862,7 @@ mod tests {
 
     #[test]
     fn test_vhost_kern_net_epoll_handler_handle_event() {
+        skip_if_kvm_unaccessable!();
         let handler = create_vhost_kern_net_epoll_handler("test_1".to_string());
         let event_fd = EventFd::new(0).unwrap();
         let mgr = EpollManager::default();

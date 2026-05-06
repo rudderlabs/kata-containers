@@ -58,7 +58,7 @@ pub struct ScsiBlockMatcher {
 
 impl ScsiBlockMatcher {
     pub fn new(scsi_addr: &str) -> ScsiBlockMatcher {
-        let search = format!(r"/0:0:{}/block/", scsi_addr);
+        let search = format!(r"/0:0:{scsi_addr}/block/");
 
         ScsiBlockMatcher { search }
     }
@@ -110,7 +110,7 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::redundant_clone)]
     async fn test_scsi_block_matcher() {
-        let root_bus = create_pci_root_bus_path();
+        let root_bus = create_pci_root_bus_path("00");
         let devname = "sda";
 
         let mut uev_a = crate::uevent::Uevent::default();
@@ -118,18 +118,14 @@ mod tests {
         uev_a.action = crate::linux_abi::U_EVENT_ACTION_ADD.to_string();
         uev_a.subsystem = BLOCK.to_string();
         uev_a.devname = devname.to_string();
-        uev_a.devpath = format!(
-            "{}/0000:00:00.0/virtio0/host0/target0:0:0/0:0:{}/block/sda",
-            root_bus, addr_a
-        );
+        uev_a.devpath =
+            format!("{root_bus}/0000:00:00.0/virtio0/host0/target0:0:0/0:0:{addr_a}/block/sda");
         let matcher_a = ScsiBlockMatcher::new(addr_a);
 
         let mut uev_b = uev_a.clone();
         let addr_b = "2:0";
-        uev_b.devpath = format!(
-            "{}/0000:00:00.0/virtio0/host0/target0:0:2/0:0:{}/block/sdb",
-            root_bus, addr_b
-        );
+        uev_b.devpath =
+            format!("{root_bus}/0000:00:00.0/virtio0/host0/target0:0:2/0:0:{addr_b}/block/sdb");
         let matcher_b = ScsiBlockMatcher::new(addr_b);
 
         assert!(matcher_a.is_match(&uev_a));

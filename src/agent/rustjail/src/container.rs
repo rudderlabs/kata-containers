@@ -28,8 +28,6 @@ use crate::cgroups::fs::Manager as FsManager;
 use crate::cgroups::mock::Manager as FsManager;
 use crate::cgroups::systemd::manager::Manager as SystemdManager;
 use crate::cgroups::{DevicesCgroupInfo, Manager};
-#[cfg(feature = "standard-oci-runtime")]
-use crate::console;
 use crate::log_child;
 use crate::process::Process;
 use crate::process::ProcessOperations;
@@ -85,7 +83,6 @@ const FIFO_FD: &str = "FIFO_FD";
 const HOME_ENV_KEY: &str = "HOME";
 const PIDNS_FD: &str = "PIDNS_FD";
 const PIDNS_ENABLED: &str = "PIDNS_ENABLED";
-const CONSOLE_SOCKET_FD: &str = "CONSOLE_SOCKET_FD";
 
 #[derive(Debug)]
 pub struct ContainerStatus {
@@ -266,8 +263,6 @@ pub struct LinuxContainer {
     pub status: ContainerStatus,
     pub created: SystemTime,
     pub logger: Logger,
-    #[cfg(feature = "standard-oci-runtime")]
-    pub console_socket: PathBuf,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -346,7 +341,7 @@ pub fn init_child() {
         Ok(_) => log_child!(cfd_log, "temporary parent process exit successfully"),
         Err(e) => {
             log_child!(cfd_log, "temporary parent process exit:child exit: {:?}", e);
-            let _ = write_sync(cwfd, SYNC_FAILED, format!("{:?}", e).as_str());
+            let _ = write_sync(cwfd, SYNC_FAILED, format!("{e:?}").as_str());
         }
     }
 }
@@ -421,9 +416,6 @@ fn do_init_child(cwfd: RawFd) -> Result<()> {
     // deserialize cm_str into FsManager and SystemdManager separately
     let fs_cm: Result<FsManager, serde_json::Error> = serde_json::from_str(cm_str);
     let systemd_cm: Result<SystemdManager, serde_json::Error> = serde_json::from_str(cm_str);
-
-    #[cfg(feature = "standard-oci-runtime")]
-    let csocket_fd = console::setup_console_socket(&std::env::var(CONSOLE_SOCKET_FD)?)?;
 
     let p = if spec.process().is_some() {
         spec.process().as_ref().unwrap()
@@ -544,13 +536,13 @@ fn do_init_child(cwfd: RawFd) -> Result<()> {
         sched::setns(fd, s).or_else(|e| {
             if s == CloneFlags::CLONE_NEWUSER {
                 if e != Errno::EINVAL {
-                    let _ = write_sync(cwfd, SYNC_FAILED, format!("{:?}", e).as_str());
+                    let _ = write_sync(cwfd, SYNC_FAILED, format!("{e:?}").as_str());
                     return Err(e);
                 }
 
                 Ok(())
             } else {
-                let _ = write_sync(cwfd, SYNC_FAILED, format!("{:?}", e).as_str());
+                let _ = write_sync(cwfd, SYNC_FAILED, format!("{e:?}").as_str());
                 Err(e)
             }
         })?;
@@ -685,7 +677,7 @@ fn do_init_child(cwfd: RawFd) -> Result<()> {
             let _ = write_sync(
                 cwfd,
                 SYNC_FAILED,
-                format!("setgroups failed: {:?}", e).as_str(),
+                format!("setgroups failed: {e:?}").as_str(),
             );
         })?;
     }
@@ -791,24 +783,13 @@ fn do_init_child(cwfd: RawFd) -> Result<()> {
     let _ = unistd::close(cwfd);
 
     if oci_process.terminal().unwrap_or_default() {
-        cfg_if::cfg_if! {
-            if #[cfg(feature = "standard-oci-runtime")] {
-                if let Some(csocket_fd) = csocket_fd {
-                    console::setup_master_console(csocket_fd)?;
-                } else {
-                    return Err(anyhow!("failed to get console master socket fd"));
-                }
-            }
-            else {
-                unistd::setsid().context("create a new session")?;
-                unsafe { libc::ioctl(0, libc::TIOCSCTTY) };
-            }
-        }
+        unistd::setsid().context("create a new session")?;
+        unsafe { libc::ioctl(0, libc::TIOCSCTTY) };
     }
 
     if init {
         let fd = fcntl::open(
-            format!("/proc/self/fd/{}", fifofd).as_str(),
+            format!("/proc/self/fd/{fifofd}").as_str(),
             OFlag::O_RDONLY | OFlag::O_CLOEXEC,
             Mode::from_bits_truncate(0),
         )?;
@@ -1037,6 +1018,12 @@ impl BaseContainer for LinuxContainer {
         let child_stderr: std::process::Stdio;
 
         if tty {
+            // NOTE(#11842): This code will require changes if we upgrade to nix 0.27+:
+            // - `pseudo` will contain OwnedFds instead of RawFds.
+            // - We'll have to use `OwnedFd::into_raw_fd()` which will
+            //   transfer the ownership to the caller.
+            // - The duplication strategy will not change.
+
             let pseudo = pty::openpty(None, None)?;
             p.term_master = Some(pseudo.master);
             let _ = fcntl::fcntl(pseudo.master, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))
@@ -1045,8 +1032,8 @@ impl BaseContainer for LinuxContainer {
                 .map_err(|e| warn!(logger, "fcntl pseudo.slave {:?}", e));
 
             child_stdin = unsafe { std::process::Stdio::from_raw_fd(pseudo.slave) };
-            child_stdout = unsafe { std::process::Stdio::from_raw_fd(pseudo.slave) };
-            child_stderr = unsafe { std::process::Stdio::from_raw_fd(pseudo.slave) };
+            child_stdout = unsafe { std::process::Stdio::from_raw_fd(unistd::dup(pseudo.slave)?) };
+            child_stderr = unsafe { std::process::Stdio::from_raw_fd(unistd::dup(pseudo.slave)?) };
 
             if let Some(proc_io) = &mut p.proc_io {
                 // A reference count used to clean up the term master fd.
@@ -1139,7 +1126,6 @@ impl BaseContainer for LinuxContainer {
         }
 
         let pidns = get_pid_namespace(&self.logger, linux)?;
-        #[cfg(not(feature = "standard-oci-runtime"))]
         if !pidns.enabled {
             return Err(anyhow!("cannot find the pid ns"));
         }
@@ -1151,13 +1137,6 @@ impl BaseContainer for LinuxContainer {
         let exec_path = std::env::current_exe()?;
         let mut child = std::process::Command::new(exec_path);
 
-        #[allow(unused_mut)]
-        let mut console_name = PathBuf::from("");
-        #[cfg(feature = "standard-oci-runtime")]
-        if !self.console_socket.as_os_str().is_empty() {
-            console_name = self.console_socket.clone();
-        }
-
         let mut child = child
             .arg("init")
             .stdin(child_stdin)
@@ -1165,18 +1144,17 @@ impl BaseContainer for LinuxContainer {
             .stderr(child_stderr)
             .env(INIT, format!("{}", p.init))
             .env(NO_PIVOT, format!("{}", self.config.no_pivot_root))
-            .env(CRFD_FD, format!("{}", crfd))
-            .env(CWFD_FD, format!("{}", cwfd))
-            .env(CLOG_FD, format!("{}", cfd_log))
-            .env(CONSOLE_SOCKET_FD, console_name)
+            .env(CRFD_FD, format!("{crfd}"))
+            .env(CWFD_FD, format!("{cwfd}"))
+            .env(CLOG_FD, format!("{cfd_log}"))
             .env(PIDNS_ENABLED, format!("{}", pidns.enabled));
 
         if p.init {
-            child = child.env(FIFO_FD, format!("{}", fifofd));
+            child = child.env(FIFO_FD, format!("{fifofd}"));
         }
 
-        if pidns.fd.is_some() {
-            child = child.env(PIDNS_FD, format!("{}", pidns.fd.unwrap()));
+        if let Some(fd) = pidns.fd {
+            child = child.env(PIDNS_FD, format!("{fd}"));
         }
 
         child.spawn()?;
@@ -1294,6 +1272,38 @@ impl BaseContainer for LinuxContainer {
         }
 
         self.status.transition(ContainerState::Stopped);
+
+        // Kill all of the processes created in this container to prevent
+        // the leak of some daemon process when this container shared pidns
+        // with the sandbox.
+        let cgm = self.cgroup_manager.as_mut();
+        let pids = cgm.get_pids().context("get cgroup pids")?;
+        info!(
+            self.logger,
+            "destroy: container {} cgroup has {} processes: {:?}",
+            self.id,
+            pids.len(),
+            pids
+        );
+        for i in &pids {
+            info!(
+                self.logger,
+                "destroy: killing process {} in container {}", i, self.id
+            );
+            if let Err(e) = signal::kill(Pid::from_raw(*i), Signal::SIGKILL) {
+                warn!(self.logger, "kill the process {} error: {:?}", i, e);
+            }
+        }
+
+        info!(
+            self.logger,
+            "destroy: destroying cgroup for container {}", self.id
+        );
+        cgm.destroy().context("destroy cgroups")?;
+
+        // Now umount and remove the container's root directory.
+        // This is done after process cleanup to ensure processes are killed
+        // even if filesystem cleanup fails (e.g., due to read-only mounts).
         mount::umount2(
             spec.root()
                 .as_ref()
@@ -1312,19 +1322,6 @@ impl BaseContainer for LinuxContainer {
             Ok(())
         })?;
         fs::remove_dir_all(&self.root)?;
-
-        let cgm = self.cgroup_manager.as_mut();
-        // Kill all of the processes created in this container to prevent
-        // the leak of some daemon process when this container shared pidns
-        // with the sandbox.
-        let pids = cgm.get_pids().context("get cgroup pids")?;
-        for i in pids {
-            if let Err(e) = signal::kill(Pid::from_raw(i), Signal::SIGKILL) {
-                warn!(self.logger, "kill the process {} error: {:?}", i, e);
-            }
-        }
-
-        cgm.destroy().context("destroy cgroups")?;
 
         Ok(())
     }
@@ -1582,9 +1579,11 @@ async fn join_namespaces(
         cm.apply(p.pid)?;
     }
 
-    if p.init && res.is_some() {
-        info!(logger, "set properties to cgroups!");
-        cm.set(res.unwrap(), false)?;
+    if p.init {
+        if let Some(resource) = res {
+            info!(logger, "set properties to cgroups!");
+            cm.set(resource, false)?;
+        }
     }
 
     info!(logger, "notify child to continue");
@@ -1681,7 +1680,7 @@ impl LinuxContainer {
                 return anyhow!(e).context(format!("container {} already exists", id.as_str()));
             }
 
-            anyhow!(e).context(format!("fail to create container directory {}", root))
+            anyhow!(e).context(format!("fail to create container directory {root}"))
         })?;
 
         unistd::chown(
@@ -1689,7 +1688,7 @@ impl LinuxContainer {
             Some(unistd::getuid()),
             Some(unistd::getgid()),
         )
-        .context(format!("Cannot change owner of container {} root", id))?;
+        .context(format!("Cannot change owner of container {id} root"))?;
 
         let spec = config.spec.as_ref().unwrap();
         let linux_cgroups_path = spec
@@ -1738,15 +1737,7 @@ impl LinuxContainer {
                 .unwrap()
                 .as_secs(),
             logger: logger.new(o!("module" => "rustjail", "subsystem" => "container", "cid" => id)),
-            #[cfg(feature = "standard-oci-runtime")]
-            console_socket: Path::new("").to_path_buf(),
         })
-    }
-
-    #[cfg(feature = "standard-oci-runtime")]
-    pub fn set_console_socket(&mut self, console_socket: &Path) -> Result<()> {
-        self.console_socket = console_socket.to_path_buf();
-        Ok(())
     }
 }
 
@@ -1914,7 +1905,7 @@ mod tests {
         let cgroups_path = format!(
             "/{}/dummycontainer{}",
             CGROUP_PARENT,
-            since_the_epoch.as_millis()
+            since_the_epoch.as_micros()
         );
 
         let mut spec = SpecBuilder::default()
@@ -1952,7 +1943,7 @@ mod tests {
         (
             LinuxContainer::new(
                 "some_id",
-                &dir.path().join("rootfs").to_str().unwrap(),
+                dir.path().join("rootfs").to_str().unwrap(),
                 None,
                 create_dummy_opts(),
                 &slog_scope::logger(),

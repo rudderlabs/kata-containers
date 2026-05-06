@@ -5,13 +5,14 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
+load "${BATS_TEST_DIRNAME}/lib.sh"
 load "${BATS_TEST_DIRNAME}/../../common.bash"
 load "${BATS_TEST_DIRNAME}/tests_common.sh"
 
 setup() {
     auto_generate_policy_enabled || skip "Auto-generated policy tests are disabled."
-
-    get_pod_config_dir
+    [[ "$(uname -m)" == "x86_64" ]] || skip "Image used in the tests is not multi-arch."
+    setup_common || die "setup_common failed"
 
     deployment_name="policy-redis-deployment"
     correct_deployment_yaml="${pod_config_dir}/k8s-policy-deployment.yaml"
@@ -44,7 +45,7 @@ test_deployment_policy_error() {
     kubectl apply -f "${incorrect_deployment_yaml}"
 
     # Wait for the deployment pod to fail
-    wait_for_blocked_request "CreateContainerRequest" "${deployment_name}"
+    wait_for_blocked_deployment_request "CreateContainerRequest" "policyredis"
 }
 
 @test "Policy failure: unexpected UID = 0" {
@@ -60,6 +61,7 @@ test_deployment_policy_error() {
 
 teardown() {
     auto_generate_policy_enabled || skip "Auto-generated policy tests are disabled."
+    [[ "$(uname -m)" == "x86_64" ]] || skip "Image used in the tests is not multi-arch."
 
     # Pod debugging information. Don't print the "Message:" line because it contains a truncated policy log.
     info "Pod ${deployment_name}:"
@@ -74,6 +76,9 @@ teardown() {
     # Clean-up
     kubectl delete deployment "${deployment_name}"
 
-    delete_tmp_policy_settings_dir "${policy_settings_dir}"
+    if [ "${BATS_TEST_NUMBER}" == "1" ]; then
+        delete_tmp_policy_settings_dir "${policy_settings_dir}"
+    fi
     rm -f "${incorrect_deployment_yaml}"
+    teardown_common "${node}" "${node_start_time:-}"
 }

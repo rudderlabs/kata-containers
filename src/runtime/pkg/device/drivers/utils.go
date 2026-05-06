@@ -72,7 +72,7 @@ func IsPCIeDevice(bdf string) bool {
 }
 
 // read from /sys/bus/pci/devices/xxx/property
-func getPCIDeviceProperty(bdf string, property PCISysFsProperty) string {
+func GetPCIDeviceProperty(bdf string, property PCISysFsProperty) string {
 	if len(strings.Split(bdf, ":")) == 2 {
 		bdf = PCIDomain + ":" + bdf
 	}
@@ -160,7 +160,7 @@ func checkIgnorePCIClass(pciClass string, deviceBDF string, bitmask uint64) (boo
 	return false, nil
 }
 
-func getMajorMinorFromDevPath(devPath string) (uint32, uint32, error) {
+func GetMajorMinorFromDevPath(devPath string) (uint32, uint32, error) {
 	fi, err := os.Stat(devPath)
 	if err != nil {
 		return 0, 0, err
@@ -181,7 +181,7 @@ func extractIndex(devicePath string) (string, error) {
 	return strings.TrimPrefix(base, prefix), nil
 }
 
-func getBdfFromVFIODev(major uint32, minor uint32) (string, error) {
+func GetBDFFromVFIODev(major uint32, minor uint32) (string, error) {
 	devPath := fmt.Sprintf("/sys/dev/char/%d:%d", major, minor)
 	realPath, err := filepath.EvalSymlinks(devPath)
 	if err != nil {
@@ -203,13 +203,13 @@ func GetDeviceFromVFIODev(device config.DeviceInfo) ([]*config.VFIODev, error) {
 	// device major:minor entries in /sys/chart/major:minor
 	// $ ls -l /dev/vfio/devices/vfio0
 	// crw------- 1 root root 237, 0 Jan 15 16:53 /dev/vfio/devices/vfio0
-	major, minor, err := getMajorMinorFromDevPath(device.HostPath)
+	major, minor, err := GetMajorMinorFromDevPath(device.HostPath)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to get major:minor from %s: %v", device.HostPath, err)
 	}
 	// $ ls -l /sys/dev/char/237:0
 	// /sys/dev/char/237:0 -> ../../devices/pci0000:64/0000:64:00.0/0000:65:00.0/vfio-dev/vfio0
-	deviceBDF, err := getBdfFromVFIODev(major, minor)
+	deviceBDF, err := GetBDFFromVFIODev(major, minor)
 	if err != nil {
 		return nil, err
 	}
@@ -220,9 +220,9 @@ func GetDeviceFromVFIODev(device config.DeviceInfo) ([]*config.VFIODev, error) {
 		return nil, err
 	}
 
-	vendorID := getPCIDeviceProperty(deviceBDF, PCISysFsDevicesVendor)
-	deviceID := getPCIDeviceProperty(deviceBDF, PCISysFsDevicesDevice)
-	pciClass := getPCIDeviceProperty(deviceBDF, PCISysFsDevicesClass)
+	vendorID := GetPCIDeviceProperty(deviceBDF, PCISysFsDevicesVendor)
+	deviceID := GetPCIDeviceProperty(deviceBDF, PCISysFsDevicesDevice)
+	pciClass := GetPCIDeviceProperty(deviceBDF, PCISysFsDevicesClass)
 
 	i, err := extractIndex(device.HostPath)
 	if err != nil {
@@ -276,7 +276,7 @@ func GetAllVFIODevicesFromIOMMUGroup(device config.DeviceInfo) ([]*config.VFIODe
 		switch vfioDeviceType {
 		case config.VFIOPCIDeviceNormalType, config.VFIOPCIDeviceMediatedType:
 			// This is vfio-pci and vfio-mdev specific
-			pciClass := getPCIDeviceProperty(deviceBDF, PCISysFsDevicesClass)
+			pciClass := GetPCIDeviceProperty(deviceBDF, PCISysFsDevicesClass)
 			// We need to ignore Host or PCI Bridges that are in the same IOMMU group as the
 			// passed-through devices. One CANNOT pass-through a PCI bridge or Host bridge.
 			// Class 0x0604 is PCI bridge, 0x0600 is Host bridge
@@ -288,8 +288,8 @@ func GetAllVFIODevicesFromIOMMUGroup(device config.DeviceInfo) ([]*config.VFIODe
 				continue
 			}
 			// Fetch the PCI Vendor ID and Device ID
-			vendorID := getPCIDeviceProperty(deviceBDF, PCISysFsDevicesVendor)
-			deviceID := getPCIDeviceProperty(deviceBDF, PCISysFsDevicesDevice)
+			vendorID := GetPCIDeviceProperty(deviceBDF, PCISysFsDevicesVendor)
+			deviceID := GetPCIDeviceProperty(deviceBDF, PCISysFsDevicesDevice)
 
 			// Do not directly assign to `vfio` -- need to access field still
 			vfio = config.VFIODev{

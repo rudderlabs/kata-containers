@@ -7,10 +7,12 @@ package virtcontainers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,7 +20,7 @@ import (
 	"time"
 
 	"github.com/kata-containers/kata-containers/src/runtime/pkg/device/config"
-	"github.com/kata-containers/kata-containers/src/runtime/pkg/device/manager"
+	deviceUtils "github.com/kata-containers/kata-containers/src/runtime/pkg/device/drivers"
 	deviceManager "github.com/kata-containers/kata-containers/src/runtime/pkg/device/manager"
 	volume "github.com/kata-containers/kata-containers/src/runtime/pkg/direct-volume"
 	"github.com/kata-containers/kata-containers/src/runtime/pkg/katautils/katatrace"
@@ -27,6 +29,7 @@ import (
 	"github.com/kata-containers/kata-containers/src/runtime/virtcontainers/types"
 	"github.com/kata-containers/kata-containers/src/runtime/virtcontainers/utils"
 
+	"github.com/moby/sys/mountinfo"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
@@ -302,6 +305,20 @@ type ContainerDevice struct {
 
 	// GID is group ID in the container namespace
 	GID uint32
+
+	// Shared indicates whether the device is shared across containers.
+	Shared bool
+}
+
+// EphemeralDisk holds information about an ephemeral disk created for
+// block-based emptyDir volumes.
+type EphemeralDisk struct {
+	// DiskPath is the path to the disk image file.
+	DiskPath string
+
+	// SourcePath is the emptyDir source path, ie. the folder created by
+	// Kubelet on the host.
+	SourcePath string
 }
 
 // RootFs describes the container's rootfs.
@@ -469,8 +486,15 @@ func (c *Container) mountSharedDirMounts(ctx context.Context, sharedDirMounts, i
 
 		// Ignore /dev, directories and all other device files. We handle
 		// only regular files in /dev. It does not make sense to pass the host
-		// device nodes to the guest.
-		if isHostDevice(m.Destination) {
+		// device nodes to the guest. We also ignore inaccessible host
+		// devices in case we're mounting a device that is only
+		// accessible in the guest.
+		//
+		// Note: K8s/containerd seems to create the source path as a
+		// directory on the host if it does not already exist.
+		// isHostDevice() will still return true in that case, so the
+		// above contract holds.
+		if isDevice, err := isHostDevice(m.Source); isDevice || err != nil {
 			continue
 		}
 
@@ -595,13 +619,16 @@ func filterDevices(c *Container, devices []ContainerDevice) (ret []ContainerDevi
 // device ID for the particular mount. This'll occur when the mountpoint source
 // is a block device.
 func (c *Container) createBlockDevices(ctx context.Context) error {
-	if !c.checkBlockDeviceSupport(ctx) {
-		c.Logger().Warn("Block device not supported")
-		return nil
-	}
-
 	// iterate all mounts and create block device if it's block based.
 	for i := range c.mounts {
+		// If block devices are disabled, we selectively only hotplug if
+		// the mount is an encrypted block-based emptyDir, to avoid
+		// cases that could regress 20ca4d2.
+		if !c.checkBlockDeviceSupport(ctx) && (c.sandbox.config.EmptyDirMode != EmptyDirModeVirtioBlkEncrypted || !Isk8sHostEmptyDir(c.mounts[i].Source)) {
+			c.Logger().Warn("Block device not supported")
+			continue
+		}
+
 		if len(c.mounts[i].BlockDeviceID) > 0 {
 			// Non-empty m.BlockDeviceID indicates there's already one device
 			// associated with the mount,so no need to create a new device for it
@@ -625,8 +652,14 @@ func (c *Container) createBlockDevices(ctx context.Context) error {
 
 		if mntInfo != nil {
 			// Write out sandbox info file on the mount source to allow CSI to communicate with the runtime
-			if err := volume.RecordSandboxId(c.sandboxID, c.mounts[i].Source); err != nil {
+			if err := volume.RecordSandboxID(c.sandboxID, c.mounts[i].Source); err != nil {
 				c.Logger().WithError(err).Error("error writing sandbox info")
+			}
+
+			// When using direct volume assignment, we assume the source file is a disk if it's a regular file.
+			fileInfo, err := os.Stat(mntInfo.Device)
+			if err == nil && fileInfo.Mode().IsRegular() {
+				isBlockFile = true
 			}
 
 			readonly := false
@@ -644,6 +677,8 @@ func (c *Container) createBlockDevices(ctx context.Context) error {
 
 			for key, value := range mntInfo.Metadata {
 				switch key {
+				case volume.EncryptionKeyMetadataKey:
+					c.mounts[i].EncryptionKey = value
 				case volume.FSGroupMetadataKey:
 					gid, err := strconv.Atoi(value)
 					if err != nil {
@@ -751,13 +786,17 @@ func newContainer(ctx context.Context, sandbox *Sandbox, contConfig *ContainerCo
 		return nil, err
 	}
 
+	if err := c.createEphemeralDisks(); err != nil {
+		return nil, err
+	}
+
 	// If mounts are block devices, add to devmanager
 	if err := c.createMounts(ctx); err != nil {
 		return nil, err
 	}
 
 	// Add container's devices to sandbox's device-manager
-	if err := c.createDevices(contConfig); err != nil {
+	if err := c.createDevices(ctx, contConfig); err != nil {
 		return nil, err
 	}
 
@@ -816,39 +855,142 @@ func (c *Container) createVirtualVolumeDevices() ([]config.DeviceInfo, error) {
 	return deviceInfos, nil
 }
 
+// getFilesystemCapacity return the total size in bytes of the filesystem
+// under path.
+func getFilesystemCapacity(path string) (uint64, error) {
+	var stat unix.Statfs_t
+	if err := unix.Statfs(path, &stat); err != nil {
+		return 0, err
+	}
+	return stat.Blocks * uint64(stat.Bsize), nil
+}
+
+func (c *Container) createEphemeralDisks() error {
+	if c.sandbox.config.EmptyDirMode != EmptyDirModeVirtioBlkEncrypted {
+		return nil
+	}
+
+	for i := range c.mounts {
+		if !Isk8sHostEmptyDir(c.mounts[i].Source) {
+			continue
+		}
+
+		// Mark the mount as shared so the block device isn't removed when a container stops.
+		c.mounts[i].Shared = true
+
+		if mounted, err := volume.IsVolumeMounted(c.mounts[i].Source); err != nil {
+			return err
+		} else if mounted {
+			continue
+		}
+
+		diskPath, err := c.setupEphemeralDisk(c.mounts[i].Source)
+		if err != nil {
+			return err
+		}
+
+		c.sandbox.ephemeralDisks = append(c.sandbox.ephemeralDisks, EphemeralDisk{
+			DiskPath:   diskPath,
+			SourcePath: c.mounts[i].Source,
+		})
+	}
+
+	return nil
+}
+
+// setupEphemeralDisk creates and configures an ephemeral disk image
+// inside the given emptyDir. It returns the path to the created disk
+// image. The fd is always closed and the disk image is removed if any
+// step after creation fails.
+func (c *Container) setupEphemeralDisk(emptyDirPath string) (diskPath string, err error) {
+	// Create the disk file in the same folder as the original
+	// emptyDir mount so that Kubelet can enforce the sizeLimit.
+	diskPath = filepath.Join(emptyDirPath, "disk.img")
+	f, err := os.Create(diskPath)
+	if err != nil {
+		c.Logger().WithError(err).Errorf("failed to create disk file at %s", diskPath)
+		return
+	}
+	defer f.Close()
+
+	defer func() {
+		if err != nil {
+			if removeErr := os.Remove(diskPath); removeErr != nil {
+				c.Logger().WithError(removeErr).Errorf("failed to clean up disk file %s after error", diskPath)
+			}
+		}
+	}()
+
+	emptyDirFsCapacity, err := getFilesystemCapacity(emptyDirPath)
+	if err != nil {
+		c.Logger().WithError(err).Errorf("failed to get filesystem capacity for mount %s", emptyDirPath)
+		return
+	}
+
+	if err = f.Truncate(int64(emptyDirFsCapacity)); err != nil {
+		c.Logger().WithError(err).Errorf("failed to truncate disk file")
+		return
+	}
+
+	var sourceStat unix.Stat_t
+	if err = unix.Stat(emptyDirPath, &sourceStat); err != nil {
+		c.Logger().WithError(err).Errorf("failed to stat mount source: %s", emptyDirPath)
+		return
+	}
+
+	metadata := map[string]string{
+		volume.EncryptionKeyMetadataKey: "ephemeral",
+	}
+	if sourceStat.Gid != 0 {
+		metadata[volume.FSGroupMetadataKey] = strconv.FormatUint(uint64(sourceStat.Gid), 10)
+	}
+
+	if err = volume.AddMountInfo(emptyDirPath, volume.MountInfo{
+		VolumeType: "blk",
+		Device:     diskPath,
+		FsType:     "ext4",
+		Metadata:   metadata,
+	}); err != nil {
+		c.Logger().WithError(err).Errorf("failed to assign direct volume for mount %s", emptyDirPath)
+		return
+	}
+
+	return
+}
+
 func (c *Container) createMounts(ctx context.Context) error {
 	// Create block devices for newly created container
 	return c.createBlockDevices(ctx)
 }
 
-func findMountSource(mnt string) (string, error) {
-	output, err := os.ReadFile("/proc/mounts")
-	if err != nil {
-		return "", err
-	}
-
-	// /proc/mounts has 6 fields per line, one mount per line, e.g.
-	// /dev/loop0 /var/lib/containerd/io.containerd.snapshotter.v1.erofs/snapshots/1/fs erofs ro,relatime,user_xattr,acl,cache_strategy=readaround 0 0
-	for _, line := range strings.Split(string(output), "\n") {
-		parts := strings.Split(line, " ")
-		if len(parts) == 6 {
-			switch parts[2] {
-			case "erofs":
-				if parts[1] == mnt {
-					return parts[0], nil
-				}
-			}
+func findErofsMountSource(mounts []*mountinfo.Info, mnt string) (string, error) {
+	for _, m := range mounts {
+		if m.FSType == "erofs" && m.Mountpoint == mnt {
+			return m.Source, nil
 		}
 	}
 	return "", fmt.Errorf("erofs mount not found for %s", mnt)
 }
 
-func (c *Container) createErofsDevices() ([]config.DeviceInfo, error) {
+func parseOverlayUpperFs(mounts []*mountinfo.Info, path string) (*mountinfo.Info, error) {
+	for _, m := range mounts {
+		if strings.HasPrefix(m.Mountpoint, filepath.Dir(path)) {
+			return m, nil
+		}
+	}
+	return nil, fmt.Errorf("upper mount not found for %s", path)
+}
+
+func (c *Container) createErofsDevices(ctx context.Context) ([]config.DeviceInfo, error) {
 	var deviceInfos []config.DeviceInfo
 	if IsErofsRootFS(c.rootFs) {
-		lowerdirs := parseErofsRootFsOptions(c.rootFs.Options)
+		mounts, err := mountinfo.GetMounts(nil)
+		if err != nil {
+			return nil, err
+		}
+		lowerdirs, upperdir := parseErofsRootFsOptions(c.rootFs.Options)
 		for _, path := range lowerdirs {
-			s, err := findMountSource(path)
+			s, err := findErofsMountSource(mounts, path)
 			if err != nil {
 				return nil, err
 			}
@@ -868,11 +1010,40 @@ func (c *Container) createErofsDevices() ([]config.DeviceInfo, error) {
 			}
 			deviceInfos = append(deviceInfos, *di)
 		}
+
+		if upperdir != "" {
+			// check if upperdir is really backed by a filesystem
+			if m, err := parseOverlayUpperFs(mounts, upperdir); err == nil {
+				s := m.Source
+				if strings.HasPrefix(s, "/dev/loop") {
+					b, err := os.ReadFile(fmt.Sprintf("/sys/block/loop%s/loop/backing_file", strings.TrimPrefix(s, "/dev/loop")))
+					if err != nil {
+						return nil, err
+					}
+					s = strings.TrimSuffix(string(b), "\n")
+				}
+				if filepath.Base(s) != "rwlayer.img" {
+					return nil, fmt.Errorf("unsupported upper blockfile %s for %s", s, upperdir)
+				}
+				// XXX: we cannot umount here because it's in another mntns,
+				//      therefore remountRo for safety; should adapt containerd
+				//      custom mount type instead.
+				if err := remount(ctx, syscall.MS_RDONLY, m.Mountpoint); err != nil {
+					return nil, fmt.Errorf("failed to unmount rwlayer %s", m.Mountpoint)
+				}
+
+				di, err := c.createDeviceInfo(s, s, false, true)
+				if err != nil {
+					return nil, err
+				}
+				deviceInfos = append(deviceInfos, *di)
+			}
+		}
 	}
 	return deviceInfos, nil
 }
 
-func (c *Container) createDevices(contConfig *ContainerConfig) error {
+func (c *Container) createDevices(ctx context.Context, contConfig *ContainerConfig) error {
 	// If devices were not found in storage, create Device implementations
 	// from the configuration. This should happen at create.
 	var storedDevices []ContainerDevice
@@ -882,7 +1053,7 @@ func (c *Container) createDevices(contConfig *ContainerConfig) error {
 	}
 	deviceInfos := append(virtualVolumesDeviceInfos, contConfig.DeviceInfos...)
 
-	erofsDeviceInfos, err := c.createErofsDevices()
+	erofsDeviceInfos, err := c.createErofsDevices(ctx)
 	if err != nil {
 		return err
 	}
@@ -965,7 +1136,9 @@ func (c *Container) createDevices(contConfig *ContainerConfig) error {
 
 	// If we're hot-plugging this will be a no-op because at this stage
 	// no devices are attached to the root-port or switch-port
-	c.annotateContainerWithVFIOMetadata(vfioColdPlugDevices)
+	if err := c.annotateContainerWithVFIOMetadata(vfioColdPlugDevices); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -1024,17 +1197,52 @@ func sortContainerVFIODevices(devices []config.DeviceInfo) []config.DeviceInfo {
 	return vfioDevices
 }
 
+// errNoSiblingFound is returned by siblingAnnotation when the VFIO device is
+// not of a supported CDI device type, i.e. it has no entry in the cdiDeviceKind
+// table (e.g. NVSwitches). Callers should treat this as a non-fatal "device not
+// applicable" condition rather than a sibling-matching failure.
+var errNoSiblingFound = fmt.Errorf("no suitable sibling found")
+
+// cdiDeviceKey identifies a device type by vendor ID and PCI class prefix.
+type cdiDeviceKey struct {
+	VendorID    string
+	ClassPrefix string
+}
+
+// cdiDeviceKind maps known device types to their CDI annotation kind.
+var cdiDeviceKind = map[cdiDeviceKey]string{
+	{VendorID: "0x10de", ClassPrefix: "0x030"}: "nvidia.com/gpu",
+}
+
+// cdiKindForDevice returns the CDI kind for a given vendor ID and PCI class,
+// or empty string and false if the device is not recognized.
+func cdiKindForDevice(vendorID, class string) (string, bool) {
+	for key, kind := range cdiDeviceKind {
+		if vendorID == key.VendorID && strings.Contains(class, key.ClassPrefix) {
+			return kind, true
+		}
+	}
+	return "", false
+}
+
 type DeviceRelation struct {
-	Bus   string
-	Path  string
-	Index int
+	Bus     string
+	Path    string
+	Index   int
+	BDF     string
+	CDIKind string
 }
 
 // Depending on the HW we might need to inject metadata into the container
 // In this case for the NV GPU we need to provide the correct mapping from
 // VFIO-<NUM> to GPU index inside of the VM when vfio_mode="guest-kernel",
 // otherwise we do not know which GPU is which.
-func (c *Container) annotateContainerWithVFIOMetadata(devices interface{}) {
+func (c *Container) annotateContainerWithVFIOMetadata(devices interface{}) error {
+
+	if ContainerType(c.config.Annotations[vcAnnotations.ContainerTypeKey]).IsCriSandbox() {
+		c.Logger().Info("Skipping VFIO metadata annotation for sandbox container")
+		return nil
+	}
 
 	modeIsGK := (c.sandbox.config.VfioMode == config.VFIOModeGuestKernel)
 
@@ -1047,15 +1255,13 @@ func (c *Container) annotateContainerWithVFIOMetadata(devices interface{}) {
 		// so lets first iterate over all root-port devices and then
 		// switch-port devices no special handling for bridge-port (PCI)
 		for _, dev := range config.PCIeDevicesPerPort["root-port"] {
-			// For the NV GPU we need special handling let's use only those
-			if dev.VendorID == "0x10de" && strings.Contains(dev.Class, "0x030") {
-				siblings = append(siblings, DeviceRelation{Bus: dev.Bus, Path: dev.HostPath})
+			if kind, ok := cdiKindForDevice(dev.VendorID, dev.Class); ok {
+				siblings = append(siblings, DeviceRelation{Bus: dev.Bus, Path: dev.HostPath, BDF: dev.BDF, CDIKind: kind})
 			}
 		}
 		for _, dev := range config.PCIeDevicesPerPort["switch-port"] {
-			// For the NV GPU we need special handling let's use only those
-			if dev.VendorID == "0x10de" && strings.Contains(dev.Class, "0x030") {
-				siblings = append(siblings, DeviceRelation{Bus: dev.Bus, Path: dev.HostPath})
+			if kind, ok := cdiKindForDevice(dev.VendorID, dev.Class); ok {
+				siblings = append(siblings, DeviceRelation{Bus: dev.Bus, Path: dev.HostPath, BDF: dev.BDF, CDIKind: kind})
 			}
 		}
 		// We need to sort the VFIO devices by bus to get the correct
@@ -1068,36 +1274,123 @@ func (c *Container) annotateContainerWithVFIOMetadata(devices interface{}) {
 			siblings[i].Index = i
 		}
 
+		// Collect container paths from either hot-plug or cold-plug devices
+		var containerPaths []string
+		if devs, ok := devices.([]ContainerDevice); ok {
+			for _, dev := range devs {
+				containerPaths = append(containerPaths, dev.ContainerPath)
+			}
+		}
+		if devs, ok := devices.([]config.DeviceInfo); ok {
+			for _, dev := range devs {
+				containerPaths = append(containerPaths, dev.ContainerPath)
+			}
+		}
+
 		// Now that we have the index lets connect the /dev/vfio/<num>
 		// to the correct index
-		if devices, ok := devices.([]ContainerDevice); ok {
-			for _, dev := range devices {
-				c.siblingAnnotation(dev.ContainerPath, siblings)
+		for _, devPath := range containerPaths {
+			if !strings.HasPrefix(devPath, "/dev/vfio") {
+				c.Logger().Infof("skipping guest annotations for non-VFIO device %q", devPath)
+				continue
 			}
-		}
-
-		if devices, ok := devices.([]config.DeviceInfo); ok {
-			for _, dev := range devices {
-				c.siblingAnnotation(dev.ContainerPath, siblings)
+			if devPath == "/dev/vfio/vfio" {
+				c.Logger().Infof("skipping /dev/vfio/vfio for vfio_mode=guest-kernel")
+				continue
 			}
-
+			if err := c.siblingAnnotation(devPath, siblings); err != nil {
+				if errors.Is(err, errNoSiblingFound) {
+					c.Logger().Infof("no CDI annotation for device %s (not a known CDI device type)", devPath)
+					continue
+				}
+				return err
+			}
 		}
 
 	}
+	return nil
 }
-func (c *Container) siblingAnnotation(devPath string, siblings []DeviceRelation) {
-	for _, sibling := range siblings {
-		if sibling.Path == devPath {
-			vfioNum := filepath.Base(devPath)
-			annoKey := fmt.Sprintf("cdi.k8s.io/vfio%s", vfioNum)
-			annoValue := fmt.Sprintf("nvidia.com/gpu=%d", sibling.Index)
-			if c.config.CustomSpec.Annotations == nil {
-				c.config.CustomSpec.Annotations = make(map[string]string)
+
+// createCDIAnnotation adds a container annotation mapping a VFIO device to a device index.
+//
+// devPath is the path to the VFIO device, which can be in the format
+// "/dev/vfio/<num>" or "/dev/vfio/devices/vfio<num>". The function extracts
+// the device number from the path and creates an annotation with the key
+// "cdi.k8s.io/vfio<num>" and the value "<cdiKind>=<index>", where
+// <cdiKind> is the CDI device kind (e.g. "nvidia.com/gpu"),
+// <num> is the device number and <index> is the provided device index.
+// The annotation is stored in c.config.CustomSpec.Annotations.
+func (c *Container) createCDIAnnotation(devPath string, index int, cdiKind string) {
+	// We have here either /dev/vfio/<num> or /dev/vfio/devices/vfio<num>
+	baseName := filepath.Base(devPath)
+	vfioNum := baseName
+	// For IOMMUFD format /dev/vfio/devices/vfio<num>, strip "vfio" prefix
+	if strings.HasPrefix(baseName, "vfio") {
+		vfioNum = strings.TrimPrefix(baseName, "vfio")
+	}
+	annoKey := fmt.Sprintf("cdi.k8s.io/vfio%s", vfioNum)
+	annoValue := fmt.Sprintf("%s=%d", cdiKind, index)
+	if c.config.CustomSpec.Annotations == nil {
+		c.config.CustomSpec.Annotations = make(map[string]string)
+	}
+	c.config.CustomSpec.Annotations[annoKey] = annoValue
+}
+
+func (c *Container) siblingAnnotation(devPath string, siblings []DeviceRelation) error {
+	// Resolve the device's BDFs once upfront. This serves two purposes:
+	// 1. Determine if the device is a known CDI type (if not, skip it)
+	// 2. Reuse the BDFs for sibling matching without redundant sysfs reads
+	isKnownCDIDevice := false
+	var devBDFs []string
+
+	if strings.HasPrefix(filepath.Base(devPath), "vfio") {
+		// IOMMUFD device (/dev/vfio/devices/vfio<NUM>): single device per char dev
+		major, minor, err := deviceUtils.GetMajorMinorFromDevPath(devPath)
+		if err != nil {
+			return err
+		}
+		bdf, err := deviceUtils.GetBDFFromVFIODev(major, minor)
+		if err != nil {
+			return err
+		}
+		devBDFs = []string{bdf}
+		vendorID := deviceUtils.GetPCIDeviceProperty(bdf, deviceUtils.PCISysFsDevicesVendor)
+		class := deviceUtils.GetPCIDeviceProperty(bdf, deviceUtils.PCISysFsDevicesClass)
+		_, isKnownCDIDevice = cdiKindForDevice(vendorID, class)
+	} else {
+		// Legacy VFIO group (/dev/vfio/<GROUP>): may contain multiple devices
+		vfioGroup := filepath.Base(devPath)
+		iommuDevicesPath := filepath.Join(config.SysIOMMUGroupPath, vfioGroup, "devices")
+		deviceFiles, err := os.ReadDir(iommuDevicesPath)
+		if err != nil {
+			return err
+		}
+		for _, deviceFile := range deviceFiles {
+			deviceBDF, _, _, err := deviceUtils.GetVFIODetails(deviceFile.Name(), iommuDevicesPath)
+			if err != nil {
+				return err
 			}
-			c.config.CustomSpec.Annotations[annoKey] = annoValue
-			c.Logger().Infof("annotated container with %s: %s", annoKey, annoValue)
+			devBDFs = append(devBDFs, deviceBDF)
+			if !isKnownCDIDevice {
+				vendorID := deviceUtils.GetPCIDeviceProperty(deviceBDF, deviceUtils.PCISysFsDevicesVendor)
+				class := deviceUtils.GetPCIDeviceProperty(deviceBDF, deviceUtils.PCISysFsDevicesClass)
+				if _, ok := cdiKindForDevice(vendorID, class); ok {
+					isKnownCDIDevice = true
+				}
+			}
 		}
 	}
+	if !isKnownCDIDevice {
+		return fmt.Errorf("device %s: %w", devPath, errNoSiblingFound)
+	}
+
+	for _, sibling := range siblings {
+		if sibling.Path == devPath || slices.Contains(devBDFs, sibling.BDF) {
+			c.createCDIAnnotation(devPath, sibling.Index, sibling.CDIKind)
+			return nil
+		}
+	}
+	return fmt.Errorf("device %s is a known CDI device type but failed to match any sibling by path or BDF", devPath)
 }
 
 // create creates and starts a container inside a Sandbox. It has to be
@@ -1126,7 +1419,9 @@ func (c *Container) create(ctx context.Context) (err error) {
 		return
 	}
 
-	c.annotateContainerWithVFIOMetadata(c.devices)
+	if err := c.annotateContainerWithVFIOMetadata(c.devices); err != nil {
+		return fmt.Errorf("annotating VFIO devices: %w", err)
+	}
 
 	// Deduce additional system mount info that should be handled by the agent
 	// inside the VM
@@ -1245,6 +1540,35 @@ func (c *Container) stop(ctx context.Context, force bool) error {
 	// issue stopContainer, otherwise the RemoveContainerRequest in it will
 	// get failed if the process hasn't exited.
 	c.sandbox.agent.waitProcess(ctx, c, c.id)
+
+	if c.sandbox.config.HypervisorConfig.SharedFS == config.NoSharedFS &&
+		c.config.Annotations["io.kubernetes.container.terminationMessagePolicy"] == "File" {
+		terminationMessagePath := c.config.Annotations["io.kubernetes.container.terminationMessagePath"]
+		if terminationMessagePath != "" {
+			data, err := c.sandbox.agent.getDiagnosticData(ctx, "termination_log", c.id)
+			if err != nil {
+				c.Logger().WithError(err).Warn("Failed to get termination message from guest")
+			} else if data != "" {
+				// The kubelet bind-mounts a host file into the container at
+				// terminationMessagePath, then reads back from that host file.
+				// With shared_fs=none the guest cannot write through that mount,
+				// so we locate the host-side path from the OCI mounts and write
+				// the data there directly.
+				var hostPath string
+				for _, m := range c.mounts {
+					if m.Destination == terminationMessagePath {
+						hostPath = m.Source
+						break
+					}
+				}
+				if hostPath == "" {
+					c.Logger().Warn("No host mount found for termination message path")
+				} else if err := os.WriteFile(hostPath, []byte(data), 0644); err != nil {
+					c.Logger().WithError(err).Warn("Failed to write termination message")
+				}
+			}
+		}
+	}
 
 	defer func() {
 		// Save device and drive data.
@@ -1380,8 +1704,8 @@ func (c *Container) update(ctx context.Context, resources specs.LinuxResources) 
 		return err
 	}
 
-	if state := c.state.State; !(state == types.StateRunning || state == types.StateReady) {
-		return fmt.Errorf("Container(%s) not running or ready, impossible to update", state)
+	if state := c.state.State; state != types.StateRunning && state != types.StateReady {
+		return fmt.Errorf("container(%s) not running or ready, impossible to update", state)
 	}
 
 	if c.config.Resources.CPU == nil {
@@ -1558,7 +1882,7 @@ func (c *Container) plugDevice(ctx context.Context, devicePath string) error {
 
 // isDriveUsed checks if a drive has been used for container rootfs
 func (c *Container) isDriveUsed() bool {
-	return !(c.state.Fstype == "")
+	return c.state.Fstype != ""
 }
 
 func (c *Container) removeDrive(ctx context.Context) (err error) {
@@ -1567,7 +1891,7 @@ func (c *Container) removeDrive(ctx context.Context) (err error) {
 
 		devID := c.state.BlockDeviceID
 		err := c.sandbox.devManager.DetachDevice(ctx, devID, c.sandbox)
-		if err != nil && err != manager.ErrDeviceNotAttached {
+		if err != nil && err != deviceManager.ErrDeviceNotAttached {
 			return err
 		}
 
@@ -1578,7 +1902,7 @@ func (c *Container) removeDrive(ctx context.Context) (err error) {
 			}).WithError(err).Error("remove device failed")
 
 			// ignore the device not exist error
-			if err != manager.ErrDeviceNotExist {
+			if err != deviceManager.ErrDeviceNotExist {
 				return err
 			}
 		}
@@ -1605,8 +1929,15 @@ func (c *Container) attachDevices(ctx context.Context) error {
 
 func (c *Container) detachDevices(ctx context.Context) error {
 	for _, dev := range c.devices {
+		// Skip detaching shared devices - they are shared across
+		// containers (e.g., block-based emptyDirs) and will be cleaned
+		// up when the sandbox is deleted.
+		if dev.Shared {
+			continue
+		}
+
 		err := c.sandbox.devManager.DetachDevice(ctx, dev.ID, c.sandbox)
-		if err != nil && err != manager.ErrDeviceNotAttached {
+		if err != nil && err != deviceManager.ErrDeviceNotAttached {
 			return err
 		}
 
@@ -1617,7 +1948,7 @@ func (c *Container) detachDevices(ctx context.Context) error {
 			}).WithError(err).Error("remove device failed")
 
 			// ignore the device not exist error
-			if err != manager.ErrDeviceNotExist {
+			if err != deviceManager.ErrDeviceNotExist {
 				return err
 			}
 		}

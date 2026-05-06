@@ -146,8 +146,16 @@ impl RemoteInner {
         id: &str,
         netns: Option<String>,
         annotations: &HashMap<String, String>,
+        selinux_label: Option<String>,
     ) -> Result<()> {
         info!(sl!(), "Preparing REMOTE VM");
+        // Remote does not support SELinux; any provided selinux_label will be ignored.
+        if selinux_label.is_some() {
+            warn!(sl!(),
+                    "SELinux label is provided for Remote VM, but Remote does not support SELinux; the label will be ignored",
+            );
+        }
+
         self.id = id.to_string();
 
         if let Some(netns_path) = &netns {
@@ -165,7 +173,10 @@ impl RemoteInner {
             ..Default::default()
         };
         info!(sl!(), "Preparing REMOTE VM req: {:?}", req.clone());
-        let resp = client.create_vm(ctx, &req).await?;
+        let resp = client
+            .create_vm(ctx, &req)
+            .await
+            .map_err(|e| anyhow::anyhow!("error creating VM: {e}"))?;
         info!(sl!(), "Preparing REMOTE VM resp: {:?}", resp.clone());
         self.agent_socket_path = resp.agentSocketPath;
         self.netns = netns;

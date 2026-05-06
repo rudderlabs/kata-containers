@@ -20,13 +20,13 @@ endif
 ifeq ($(ARCH), x86_64)
 BASE_TARBALLS = serial-targets \
 	firecracker-tarball \
-	kernel-confidential-tarball \
+	kernel-debug-tarball \
 	kernel-dragonball-experimental-tarball \
 	kernel-nvidia-gpu-tarball \
-	kernel-nvidia-gpu-confidential-tarball \
 	kernel-tarball \
 	nydus-tarball \
 	ovmf-sev-tarball \
+	ovmf-tdx-tarball \
 	ovmf-tarball \
 	qemu-snp-experimental-tarball \
 	qemu-tdx-experimental-tarball \
@@ -43,11 +43,26 @@ BASE_SERIAL_TARBALLS = rootfs-image-tarball \
 	cloud-hypervisor-glibc-tarball
 else ifeq ($(ARCH), s390x)
 BASE_TARBALLS = serial-targets \
+	kernel-debug-tarball \
 	kernel-tarball \
 	qemu-tarball \
 	shim-v2-tarball \
 	virtiofsd-tarball
 BASE_SERIAL_TARBALLS = rootfs-image-tarball \
+	rootfs-initrd-tarball
+else ifeq ($(ARCH), aarch64)
+BASE_TARBALLS = serial-targets \
+	kernel-cca-confidential-tarball \
+	kernel-debug-tarball \
+	kernel-tarball \
+	qemu-tarball \
+	qemu-cca-experimental-tarball \
+	shim-v2-tarball \
+	virtiofsd-tarball
+BASE_SERIAL_TARBALLS = rootfs-image-tarball \
+	rootfs-image-confidential-tarball \
+	rootfs-cca-confidential-image-tarball \
+	rootfs-cca-confidential-initrd-tarball \
 	rootfs-initrd-tarball
 endif
 
@@ -57,7 +72,7 @@ endef
 
 define DUMMY
 	$(call BUILD,"dummy")
-	mv $(MK_DIR)/build/kata-static-dummy.tar.xz $(MK_DIR)/build/kata-static-$(patsubst %-tarball,%,$1).tar.xz
+	mv $(MK_DIR)/build/kata-static-dummy.tar.zst $(MK_DIR)/build/kata-static-$(patsubst %-tarball,%,$1).tar.zst
 endef
 
 kata-tarball: | all-parallel merge-builds
@@ -87,9 +102,9 @@ agent-ctl-tarball: copy-scripts-for-the-tools-build
 	${MAKE} $@-build
 
 BUSYBOX_CONF_FILE ?= busybox.nvidia.conf
-busybox-tarball: 
+busybox-tarball:
 	${MAKE} BUSYBOX_CONF_FILE=${BUSYBOX_CONF_FILE} $@-build
-	
+
 coco-guest-components-tarball:
 	${MAKE} $@-build
 
@@ -97,9 +112,6 @@ cloud-hypervisor-tarball:
 	${MAKE} $@-build
 
 cloud-hypervisor-glibc-tarball:
-	${MAKE} $@-build
-
-csi-kata-directvolume-tarball: copy-scripts-for-the-tools-build
 	${MAKE} $@-build
 
 firecracker-tarball:
@@ -126,19 +138,25 @@ kernel-dragonball-experimental-tarball:
 kernel-nvidia-gpu-tarball:
 	${MAKE} $@-build
 
-kernel-nvidia-gpu-confidential-tarball:
-	${MAKE} $@-build
-
 kernel-tarball:
 	${MAKE} $@-build
 
-kernel-confidential-tarball:
+kernel-debug-tarball:
+	${MAKE} $@-build
+
+kernel-cca-confidential-tarball:
 	${MAKE} $@-build
 
 nydus-tarball:
 	${MAKE} $@-build
 
 ovmf-sev-tarball:
+	${MAKE} $@-build
+
+ovmf-tdx-tarball:
+	${MAKE} $@-build
+
+ovmf-cca-tarball:
 	${MAKE} $@-build
 
 ovmf-tarball:
@@ -150,10 +168,13 @@ qemu-snp-experimental-tarball:
 qemu-tdx-experimental-tarball:
 	${MAKE} $@-build
 
+qemu-cca-experimental-tarball:
+	${MAKE} $@-build
+
 qemu-tarball:
 	${MAKE} $@-build
 
-boot-image-se-tarball: kernel-confidential-tarball rootfs-initrd-confidential-tarball
+boot-image-se-tarball: kernel-tarball rootfs-initrd-confidential-tarball
 	${MAKE} $@-build
 
 stratovirt-tarball:
@@ -162,30 +183,28 @@ stratovirt-tarball:
 rootfs-image-tarball: agent-tarball
 	${MAKE} $@-build
 
-rootfs-image-confidential-tarball: agent-tarball pause-image-tarball coco-guest-components-tarball kernel-confidential-tarball
+rootfs-image-confidential-tarball: agent-tarball pause-image-tarball coco-guest-components-tarball kernel-tarball
 	${MAKE} $@-build
 
 rootfs-image-mariner-tarball: agent-tarball
 	${MAKE} $@-build
 
-rootfs-initrd-confidential-tarball: agent-tarball pause-image-tarball coco-guest-components-tarball kernel-confidential-tarball
+rootfs-initrd-confidential-tarball: agent-tarball pause-image-tarball coco-guest-components-tarball kernel-tarball
 	${MAKE} $@-build
 
 rootfs-initrd-tarball: agent-tarball
 	${MAKE} $@-build
 
-runk-tarball: copy-scripts-for-the-tools-build
-	${MAKE} $@-build
 rootfs-image-nvidia-gpu-tarball: agent-tarball busybox-tarball kernel-nvidia-gpu-tarball
 	${MAKE} $@-build
 
-rootfs-initrd-nvidia-gpu-tarball: agent-tarball busybox-tarball kernel-nvidia-gpu-tarball
+rootfs-image-nvidia-gpu-confidential-tarball: agent-tarball busybox-tarball pause-image-tarball coco-guest-components-tarball kernel-nvidia-gpu-tarball
 	${MAKE} $@-build
 
-rootfs-image-nvidia-gpu-confidential-tarball: agent-tarball busybox-tarball pause-image-tarball coco-guest-components-tarball kernel-nvidia-gpu-confidential-tarball
+rootfs-cca-confidential-image-tarball: agent-tarball pause-image-tarball coco-guest-components-tarball kernel-cca-confidential-tarball
 	${MAKE} $@-build
 
-rootfs-initrd-nvidia-gpu-confidential-tarball: agent-tarball busybox-tarball pause-image-tarball coco-guest-components-tarball kernel-nvidia-gpu-confidential-tarball
+rootfs-cca-confidential-initrd-tarball: agent-tarball pause-image-tarball coco-guest-components-tarball kernel-cca-confidential-tarball
 	${MAKE} $@-build
 
 shim-v2-tarball:
@@ -201,4 +220,4 @@ merge-builds:
 	$(MK_DIR)/kata-deploy-merge-builds.sh build "$(MK_DIR)/../../../../versions.yaml"
 
 install-tarball:
-	tar -xf ./kata-static.tar.xz -C /
+	tar --zstd -xf ./kata-static.tar.zst -C /

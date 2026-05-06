@@ -21,10 +21,10 @@
 //! - PCI configuration: a common framework to emulator PCI configuration space header.
 //! - PCI MSI/MSIx: structs to emulate PCI MSI/MSIx capabilities.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use dbs_device::device_manager::IoManagerContext;
-use dbs_interrupt::KvmIrqManager;
+use dbs_interrupt::InterruptManager;
 
 mod bus;
 pub use bus::PciBus;
@@ -58,8 +58,17 @@ pub use msix::{MsixCap, MsixState, MSIX_TABLE_ENTRY_SIZE};
 mod vfio;
 pub use vfio::{VfioPciDevice, VfioPciError, VENDOR_NVIDIA};
 
+mod virtio_pci;
+pub use virtio_pci::{VirtioPciDevice, VirtioPciDeviceError, CAPABILITY_BAR_SIZE};
+
+mod pci_address;
+use dbs_virtio_devices::VirtioDevice;
+pub use pci_address::PciAddress;
+
+mod pci_common_config;
+
 /// Error codes related to PCI root/bus/device operations.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, PartialEq)]
 pub enum Error {
     /// Failed to activate the PCI root/bus/device.
     #[error("failed to activate PCI device, {0:?}")]
@@ -110,6 +119,9 @@ pub enum Error {
     /// PCI ROM BAR address is invalid.
     #[error("address {0} size {1} too big")]
     RomBarAddressInvalid(u64, u64),
+    /// Invalid parameter
+    #[error("invalid pci device address")]
+    InvalidParameter,
 }
 
 /// Specialized `Result` for PCI related operations.
@@ -120,7 +132,7 @@ pub trait PciSystemContext: Sync + Send + Clone {
 
     fn get_device_manager_context(&self) -> Self::D;
 
-    fn get_interrupt_manager(&self) -> Arc<KvmIrqManager>;
+    fn get_interrupt_manager(&self) -> Arc<Box<dyn InterruptManager>>;
 }
 
 /// Fill the buffer with all bits set for invalid PCI configuration space access.
@@ -130,3 +142,8 @@ pub fn fill_config_data(data: &mut [u8]) {
         *pos = 0xff;
     }
 }
+
+/// we only support one pci bus
+pub const PCI_BUS_DEFAULT: u8 = 0;
+
+type ArcMutexBoxDynVirtioDevice<AS, Q, R> = Arc<Mutex<Box<dyn VirtioDevice<AS, Q, R>>>>;

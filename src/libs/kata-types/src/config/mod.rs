@@ -4,16 +4,15 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::{self, Result};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::u32;
 
 use lazy_static::lazy_static;
 
-use crate::{eother, sl};
+use crate::sl;
 
 /// Default configuration values.
 pub mod default;
@@ -25,8 +24,9 @@ pub mod hypervisor;
 pub use self::agent::Agent;
 use self::default::DEFAULT_AGENT_DBG_CONSOLE_PORT;
 pub use self::hypervisor::{
-    BootInfo, CloudHypervisorConfig, DragonballConfig, FirecrackerConfig, Hypervisor, QemuConfig,
-    RemoteConfig, HYPERVISOR_NAME_DRAGONBALL, HYPERVISOR_NAME_FIRECRACKER, HYPERVISOR_NAME_QEMU,
+    BootInfo, CloudHypervisorConfig, DragonballConfig, Factory, FirecrackerConfig, Hypervisor,
+    QemuConfig, RemoteConfig, HYPERVISOR_NAME_DRAGONBALL, HYPERVISOR_NAME_FIRECRACKER,
+    HYPERVISOR_NAME_QEMU,
 };
 
 mod runtime;
@@ -54,6 +54,8 @@ pub const DEBUG_CONSOLE_VPORT_OPTION: &str = "agent.debug_console_vport";
 pub const LOG_VPORT_OPTION: &str = "agent.log_vport";
 /// Option of setting the container's pipe size
 pub const CONTAINER_PIPE_SIZE_OPTION: &str = "agent.container_pipe_size";
+/// Option of setting the guest component launch process timeout
+pub const LAUNCH_PROCESS_TIMEOUT_OPTION: &str = "agent.launch_process_timeout";
 /// Option of setting the fd passthrough io listener port
 pub const PASSFD_LISTENER_PORT: &str = "agent.passfd_listener_port";
 
@@ -131,9 +133,7 @@ impl TomlConfig {
     pub fn load_from_file<P: AsRef<Path>>(config_file: P) -> Result<(TomlConfig, PathBuf)> {
         let mut result = Self::load_raw_from_file(config_file);
         if let Ok((ref mut config, _)) = result {
-            Hypervisor::adjust_config(config)?;
-            Runtime::adjust_config(config)?;
-            Agent::adjust_config(config)?;
+            config.adjust_config()?;
             info!(sl!(), "get kata config: {:?}", config);
         }
 
@@ -175,11 +175,27 @@ impl TomlConfig {
     /// drop-in config file fragments in config.d/.
     pub fn load(content: &str) -> Result<TomlConfig> {
         let mut config: TomlConfig = toml::from_str(content)?;
-        Hypervisor::adjust_config(&mut config)?;
-        Runtime::adjust_config(&mut config)?;
-        Agent::adjust_config(&mut config)?;
+        config.adjust_config()?;
         info!(sl!(), "get kata config: {:?}", config);
         Ok(config)
+    }
+
+    /// Get the `Factory` configuration from the active hypervisor.
+    pub fn get_factory(&self) -> Factory {
+        let hypervisor_name = self.runtime.hypervisor_name.as_str();
+        self.hypervisor
+            .get(hypervisor_name)
+            .map(|hv| hv.factory.clone())
+            .unwrap_or_default()
+    }
+
+    /// Adjust Kata configuration information.
+    pub fn adjust_config(&mut self) -> Result<()> {
+        Hypervisor::adjust_config(self)?;
+        Runtime::adjust_config(self)?;
+        Agent::adjust_config(self)?;
+
+        Ok(())
     }
 
     /// Validate Kata configuration information.
@@ -192,8 +208,8 @@ impl TomlConfig {
     }
 
     /// Get agent-specfic kernel parameters for further Hypervisor config revision
-    pub fn get_agent_kernel_params(&self) -> Result<HashMap<String, String>> {
-        let mut kv = HashMap::new();
+    pub fn get_agent_kernel_params(&self) -> Result<BTreeMap<String, String>> {
+        let mut kv = BTreeMap::new();
         if let Some(cfg) = self.agent.get(&self.runtime.agent_name) {
             if cfg.debug {
                 kv.insert(LOG_LEVEL_OPTION.to_string(), LOG_LEVEL_DEBUG.to_string());
@@ -204,6 +220,13 @@ impl TomlConfig {
             if cfg.container_pipe_size > 0 {
                 let container_pipe_size = cfg.container_pipe_size.to_string();
                 kv.insert(CONTAINER_PIPE_SIZE_OPTION.to_string(), container_pipe_size);
+            }
+            if cfg.launch_process_timeout > 0 {
+                let launch_process_timeout = cfg.launch_process_timeout.to_string();
+                kv.insert(
+                    LAUNCH_PROCESS_TIMEOUT_OPTION.to_string(),
+                    launch_process_timeout,
+                );
             }
             if cfg.debug_console_enabled {
                 kv.insert(DEBUG_CONSOLE_FLAG.to_string(), "".to_string());
@@ -317,10 +340,9 @@ impl TomlConfig {
 ///
 /// Each member in `patterns` is a path pattern as described by glob(3)
 pub fn validate_path_pattern<P: AsRef<Path>>(patterns: &[String], path: P) -> Result<()> {
-    let path = path
-        .as_ref()
-        .to_str()
-        .ok_or_else(|| eother!("Invalid path {}", path.as_ref().to_string_lossy()))?;
+    let path = path.as_ref().to_str().ok_or_else(|| {
+        std::io::Error::other(format!("Invalid path {}", path.as_ref().to_string_lossy()))
+    })?;
     for p in patterns.iter() {
         if let Ok(glob) = glob::Pattern::new(p) {
             if glob.matches(path) {
@@ -329,7 +351,9 @@ pub fn validate_path_pattern<P: AsRef<Path>>(patterns: &[String], path: P) -> Re
         }
     }
 
-    Err(eother!("Path {} is not permitted", path))
+    Err(std::io::Error::other(format!(
+        "Path {path} is not permitted"
+    )))
 }
 
 /// Kata configuration information.
@@ -464,6 +488,7 @@ mod tests {
             enable_tracing: true,
             container_pipe_size: 20,
             debug_console_enabled: true,
+            launch_process_timeout: 60,
             ..Default::default()
         };
         let agent_name = "test_agent";
@@ -476,5 +501,6 @@ mod tests {
         assert_eq!(kv.get("agent.container_pipe_size").unwrap(), "20");
         kv.get("agent.debug_console").unwrap();
         assert_eq!(kv.get("agent.debug_console_vport").unwrap(), "1026"); // 1026 is the default port
+        assert_eq!(kv.get("agent.launch_process_timeout").unwrap(), "60");
     }
 }

@@ -14,9 +14,10 @@ use crate::{
     volume::share_fs_volume::generate_mount_path,
 };
 use anyhow::{anyhow, Context, Result};
-use kata_sys_util::{
-    eother,
-    mount::{get_mount_options, get_mount_path},
+use kata_sys_util::mount::{get_mount_options, get_mount_path};
+use kata_types::device::{
+    DRIVER_BLK_CCW_TYPE as KATA_CCW_DEV_TYPE, DRIVER_BLK_PCI_TYPE as KATA_BLK_DEV_TYPE,
+    DRIVER_SCSI_TYPE as KATA_SCSI_DEV_TYPE,
 };
 use oci_spec::runtime as oci;
 
@@ -25,18 +26,16 @@ use hypervisor::device::DeviceType;
 pub const DEFAULT_VOLUME_FS_TYPE: &str = "ext4";
 pub const KATA_MOUNT_BIND_TYPE: &str = "bind";
 
-pub const KATA_BLK_DEV_TYPE: &str = "blk";
-
 pub fn get_file_name<P: AsRef<Path>>(src: P) -> Result<String> {
     let file_name = src
         .as_ref()
         .file_name()
         .map(|v| v.to_os_string())
         .ok_or_else(|| {
-            eother!(
+            std::io::Error::other(format!(
                 "failed to get file name of path {}",
                 src.as_ref().to_string_lossy()
-            )
+            ))
         })?
         .into_string()
         .map_err(|e| anyhow!("failed to convert to string {:?}", e))?;
@@ -97,6 +96,20 @@ pub async fn handle_block_volume(
                     pci_path.to_string()
                 } else {
                     return Err(anyhow!("block driver is blk but no pci path exists"));
+                }
+            }
+            KATA_SCSI_DEV_TYPE => {
+                if let Some(scsi_addr) = device.config.scsi_addr {
+                    scsi_addr.to_string()
+                } else {
+                    return Err(anyhow!("block driver is scsi but no scsi address exists"));
+                }
+            }
+            KATA_CCW_DEV_TYPE => {
+                if let Some(ccw_addr) = device.config.ccw_addr {
+                    ccw_addr.to_string()
+                } else {
+                    return Err(anyhow!("block driver is ccw but no ccw address exists"));
                 }
             }
             _ => device.config.virt_path,

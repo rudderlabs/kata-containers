@@ -13,12 +13,21 @@ pub mod device;
 pub mod hypervisor_persist;
 pub use device::driver::*;
 use device::DeviceType;
-#[cfg(feature = "dragonball")]
+#[cfg(all(
+    feature = "dragonball",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 pub mod dragonball;
+// Firecracker upstream only releases binaries for x86_64 and aarch64
+// (see https://github.com/firecracker-microvm/firecracker/releases), so there
+// is no point compiling the in-tree driver on other architectures. Use the
+// same architecture gate as `ch` (further down in this file) for consistency.
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 pub mod firecracker;
 mod kernel_param;
 pub mod qemu;
 pub mod remote;
+pub mod selinux;
 pub use kernel_param::Param;
 pub mod utils;
 use std::collections::HashMap;
@@ -47,23 +56,28 @@ const VM_ROOTFS_DRIVER_MMIO: &str = "virtio-blk-mmio";
 const VM_ROOTFS_ROOT_BLK: &str = "/dev/vda1";
 const VM_ROOTFS_ROOT_PMEM: &str = "/dev/pmem0p1";
 
-// Config which filesystem to use as rootfs type
-const VM_ROOTFS_FILESYSTEM_EXT4: &str = "ext4";
-const VM_ROOTFS_FILESYSTEM_XFS: &str = "xfs";
-const VM_ROOTFS_FILESYSTEM_EROFS: &str = "erofs";
-
 // before using hugepages for VM, we need to mount hugetlbfs
 // /dev/hugepages will be the mount point
 // mkdir -p /dev/hugepages
 // mount -t hugetlbfs none /dev/hugepages
 pub const HUGETLBFS: &str = "hugetlbfs";
-// Constants required for Dragonball VMM when enabled
-// Not needed when the built-in VMM is not used.
-#[cfg(feature = "dragonball")]
+// Constants required for Dragonball VMM when enabled.
+// Gated on both feature and arch so they activate together with `pub mod
+// dragonball;` above (the dragonball crate only builds on x86_64/aarch64).
+#[cfg(all(
+    feature = "dragonball",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 const DEV_HUGEPAGES: &str = "/dev/hugepages";
-#[cfg(feature = "dragonball")]
+#[cfg(all(
+    feature = "dragonball",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 const SHMEM: &str = "shmem";
-#[cfg(feature = "dragonball")]
+#[cfg(all(
+    feature = "dragonball",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 const HUGE_SHMEM: &str = "hugeshmem";
 
 pub const HYPERVISOR_DRAGONBALL: &str = "dragonball";
@@ -74,6 +88,16 @@ pub const HYPERVISOR_REMOTE: &str = "remote";
 pub const DEFAULT_HYBRID_VSOCK_NAME: &str = "kata.hvsock";
 pub const JAILER_ROOT: &str = "root";
 
+/// default hotplug timeout
+#[allow(dead_code)]
+const DEFAULT_HOTPLUG_TIMEOUT: u64 = 250;
+
+// Used only by the dragonball, cloud-hypervisor and firecracker drivers, all
+// of which are gated to `target_arch = "x86_64"|"aarch64"`. Without the gate
+// here, `cargo clippy --all-features -- -D warnings` (i.e. what `make check`
+// runs via utils.mk's `standard_rust_check`) fails on s390x/ppc64le/riscv64gc
+// with `enum VmmState is never used`.
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 #[derive(PartialEq, Debug, Clone)]
 pub(crate) enum VmmState {
     NotReady,
@@ -103,6 +127,7 @@ pub trait Hypervisor: std::fmt::Debug + Send + Sync {
         id: &str,
         netns: Option<String>,
         annotations: &HashMap<String, String>,
+        selinux_label: Option<String>,
     ) -> Result<()>;
     async fn start_vm(&self, timeout: i32) -> Result<()>;
     async fn stop_vm(&self) -> Result<()>;

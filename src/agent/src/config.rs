@@ -25,6 +25,7 @@ const HOTPLUG_TIMOUT_OPTION: &str = "agent.hotplug_timeout";
 const CDH_API_TIMOUT_OPTION: &str = "agent.cdh_api_timeout";
 const CDH_IMAGE_PULL_TIMEOUT_OPTION: &str = "agent.image_pull_timeout";
 const CDI_TIMEOUT_OPTION: &str = "agent.cdi_timeout";
+const LAUNCH_PROCESS_TIMEOUT_OPTION: &str = "agent.launch_process_timeout";
 const DEBUG_CONSOLE_VPORT_OPTION: &str = "agent.debug_console_vport";
 const LOG_VPORT_OPTION: &str = "agent.log_vport";
 const CONTAINER_PIPE_SIZE_OPTION: &str = "agent.container_pipe_size";
@@ -66,6 +67,7 @@ const DEFAULT_HOTPLUG_TIMEOUT: time::Duration = time::Duration::from_secs(3);
 const DEFAULT_CDH_API_TIMEOUT: time::Duration = time::Duration::from_secs(50);
 const DEFAULT_IMAGE_PULL_TIMEOUT: time::Duration = time::Duration::from_secs(1200);
 const DEFAULT_CDI_TIMEOUT: time::Duration = time::Duration::from_secs(100);
+const DEFAULT_LAUNCH_PROCESS_TIMEOUT: time::Duration = time::Duration::from_secs(6);
 const DEFAULT_CONTAINER_PIPE_SIZE: i32 = 0;
 const VSOCK_ADDR: &str = "vsock://-1";
 
@@ -130,6 +132,7 @@ pub struct AgentConfig {
     pub cdh_api_timeout: time::Duration,
     pub image_pull_timeout: time::Duration,
     pub cdi_timeout: time::Duration,
+    pub launch_process_timeout: time::Duration,
     pub debug_console_vport: i32,
     pub log_vport: i32,
     pub container_pipe_size: i32,
@@ -163,6 +166,7 @@ pub struct AgentConfigBuilder {
     pub cdh_api_timeout: Option<time::Duration>,
     pub image_pull_timeout: Option<time::Duration>,
     pub cdi_timeout: Option<time::Duration>,
+    pub launch_process_timeout: Option<time::Duration>,
     pub debug_console_vport: Option<i32>,
     pub log_vport: Option<i32>,
     pub container_pipe_size: Option<i32>,
@@ -202,7 +206,7 @@ macro_rules! config_override {
         }
     };
 
-    ($builder:ident, $config:ident, $field:ident, $func: ident) => {
+    ($builder:ident, $config:ident, $field:ident, $func:ident) => {
         if let Some(v) = $builder.$field {
             $config.$field = $func(&v)?;
         }
@@ -257,10 +261,11 @@ impl Default for AgentConfig {
             cdh_api_timeout: DEFAULT_CDH_API_TIMEOUT,
             image_pull_timeout: DEFAULT_IMAGE_PULL_TIMEOUT,
             cdi_timeout: DEFAULT_CDI_TIMEOUT,
+            launch_process_timeout: DEFAULT_LAUNCH_PROCESS_TIMEOUT,
             debug_console_vport: 0,
             log_vport: 0,
             container_pipe_size: DEFAULT_CONTAINER_PIPE_SIZE,
-            server_addr: format!("{}:{}", VSOCK_ADDR, DEFAULT_AGENT_VSOCK_PORT),
+            server_addr: format!("{VSOCK_ADDR}:{DEFAULT_AGENT_VSOCK_PORT}"),
             passfd_listener_port: 0,
             cgroup_no_v1: String::from(""),
             unified_cgroup_hierarchy: false,
@@ -269,7 +274,7 @@ impl Default for AgentConfig {
             no_proxy: String::from(""),
             guest_components_rest_api: GuestComponentsFeatures::default(),
             guest_components_procs: GuestComponentsProcs::default(),
-            secure_storage_integrity: false,
+            secure_storage_integrity: true,
             #[cfg(feature = "agent-policy")]
             policy_file: String::from(""),
             mem_agent: None,
@@ -298,6 +303,7 @@ impl FromStr for AgentConfig {
         config_override!(agent_config_builder, agent_config, cdh_api_timeout);
         config_override!(agent_config_builder, agent_config, image_pull_timeout);
         config_override!(agent_config_builder, agent_config, cdi_timeout);
+        config_override!(agent_config_builder, agent_config, launch_process_timeout);
         config_override!(agent_config_builder, agent_config, debug_console_vport);
         config_override!(agent_config_builder, agent_config, log_vport);
         config_override!(agent_config_builder, agent_config, container_pipe_size);
@@ -417,7 +423,7 @@ impl AgentConfig {
             // generate our config from it.
             // The agent will fail to start if the configuration file is not present,
             // or if it can't be parsed properly.
-            if param.starts_with(format!("{}=", CONFIG_FILE).as_str()) {
+            if param.starts_with(format!("{CONFIG_FILE}=").as_str()) {
                 let config_file = get_string_value(param)?;
                 return AgentConfig::from_config_file(&config_file)
                     .context("AgentConfig from kernel cmdline");
@@ -479,6 +485,14 @@ impl AgentConfig {
                 config.cdi_timeout,
                 get_timeout,
                 |cdi_timeout: &time::Duration| cdi_timeout.as_secs() > 0
+            );
+
+            parse_cmdline_param!(
+                param,
+                LAUNCH_PROCESS_TIMEOUT_OPTION,
+                config.launch_process_timeout,
+                get_timeout,
+                |launch_process_timeout: &time::Duration| launch_process_timeout.as_secs() > 0
             );
 
             // vsock port should be positive values
@@ -651,7 +665,7 @@ impl AgentConfig {
     #[instrument]
     pub fn from_config_file(file: &str) -> Result<AgentConfig> {
         let config = fs::read_to_string(file)
-            .with_context(|| format!("Failed to read config file {}", file))?;
+            .with_context(|| format!("Failed to read config file {file}"))?;
         AgentConfig::from_str(&config)
     }
 
@@ -661,14 +675,14 @@ impl AgentConfig {
             self.server_addr = addr;
         }
 
-        if let Ok(addr) = env::var(LOG_LEVEL_ENV_VAR) {
-            if let Ok(level) = logrus_to_slog_level(&addr) {
+        if let Ok(level) = env::var(LOG_LEVEL_ENV_VAR) {
+            if let Ok(level) = logrus_to_slog_level(&level) {
                 self.log_level = level;
             }
         }
 
         if let Ok(value) = env::var(TRACING_ENV_VAR) {
-            let name_value = format!("{}={}", TRACING_ENV_VAR, value);
+            let name_value = format!("{TRACING_ENV_VAR}={value}");
 
             self.tracing = get_bool_value(&name_value).unwrap_or(false);
         }
@@ -742,6 +756,7 @@ fn get_timeout(param: &str) -> Result<time::Duration> {
                 | CDH_API_TIMOUT_OPTION
                 | CDH_IMAGE_PULL_TIMEOUT_OPTION
                 | CDI_TIMEOUT_OPTION
+                | LAUNCH_PROCESS_TIMEOUT_OPTION
         ),
         ERR_INVALID_TIMEOUT_KEY
     );
@@ -911,7 +926,7 @@ mod tests {
                     no_proxy: "",
                     guest_components_rest_api: GuestComponentsFeatures::default(),
                     guest_components_procs: GuestComponentsProcs::default(),
-                    secure_storage_integrity: false,
+                    secure_storage_integrity: true,
                     #[cfg(feature = "agent-policy")]
                     policy_file: "",
                     mem_agent: None,
@@ -1364,7 +1379,7 @@ mod tests {
             },
             TestData {
                 contents: "",
-                secure_storage_integrity: false,
+                secure_storage_integrity: true,
                 ..Default::default()
             },
             TestData {
@@ -1442,7 +1457,7 @@ mod tests {
         // Now, test various combinations of file contents and environment
         // variables.
         for (i, d) in tests.iter().enumerate() {
-            let msg = format!("test[{}]: {:?}", i, d);
+            let msg = format!("test[{i}]: {d:?}");
 
             let file_path = dir.path().join("cmdline");
 
@@ -1470,40 +1485,36 @@ mod tests {
             let config =
                 AgentConfig::from_cmdline(filename, vec![]).expect("Failed to parse command line");
 
-            assert_eq!(d.debug_console, config.debug_console, "{}", msg);
-            assert_eq!(d.dev_mode, config.dev_mode, "{}", msg);
-            assert_eq!(d.cgroup_no_v1, config.cgroup_no_v1, "{}", msg);
+            assert_eq!(d.debug_console, config.debug_console, "{msg}");
+            assert_eq!(d.dev_mode, config.dev_mode, "{msg}");
+            assert_eq!(d.cgroup_no_v1, config.cgroup_no_v1, "{msg}");
             assert_eq!(
                 d.unified_cgroup_hierarchy, config.unified_cgroup_hierarchy,
-                "{}",
-                msg
+                "{msg}"
             );
-            assert_eq!(d.log_level, config.log_level, "{}", msg);
-            assert_eq!(d.hotplug_timeout, config.hotplug_timeout, "{}", msg);
-            assert_eq!(d.container_pipe_size, config.container_pipe_size, "{}", msg);
-            assert_eq!(d.server_addr, config.server_addr, "{}", msg);
-            assert_eq!(d.tracing, config.tracing, "{}", msg);
-            assert_eq!(d.https_proxy, config.https_proxy, "{}", msg);
-            assert_eq!(d.no_proxy, config.no_proxy, "{}", msg);
+            assert_eq!(d.log_level, config.log_level, "{msg}");
+            assert_eq!(d.hotplug_timeout, config.hotplug_timeout, "{msg}");
+            assert_eq!(d.container_pipe_size, config.container_pipe_size, "{msg}");
+            assert_eq!(d.server_addr, config.server_addr, "{msg}");
+            assert_eq!(d.tracing, config.tracing, "{msg}");
+            assert_eq!(d.https_proxy, config.https_proxy, "{msg}");
+            assert_eq!(d.no_proxy, config.no_proxy, "{msg}");
             assert_eq!(
                 d.guest_components_rest_api, config.guest_components_rest_api,
-                "{}",
-                msg
+                "{msg}"
             );
             assert_eq!(
                 d.guest_components_procs, config.guest_components_procs,
-                "{}",
-                msg
+                "{msg}"
             );
             assert_eq!(
                 d.secure_storage_integrity, config.secure_storage_integrity,
-                "{}",
-                msg
+                "{msg}"
             );
             #[cfg(feature = "agent-policy")]
-            assert_eq!(d.policy_file, config.policy_file, "{}", msg);
+            assert_eq!(d.policy_file, config.policy_file, "{msg}");
 
-            assert_eq!(d.mem_agent, config.mem_agent, "{}", msg);
+            assert_eq!(d.mem_agent, config.mem_agent, "{msg}");
 
             for v in vars_to_unset {
                 env::remove_var(v);
@@ -1568,7 +1579,7 @@ mod tests {
     #[case("panic", Ok(slog::Level::Critical))]
     fn test_logrus_to_slog_level(#[case] input: &str, #[case] expected: Result<slog::Level>) {
         let result = logrus_to_slog_level(input);
-        let msg = format!("expected: {:?}, result: {:?}", expected, result);
+        let msg = format!("expected: {expected:?}, result: {result:?}");
         assert_result!(expected, result, msg);
     }
 
@@ -1593,7 +1604,7 @@ mod tests {
     #[case("agent.log=panic", Ok(slog::Level::Critical))]
     fn test_get_log_level(#[case] input: &str, #[case] expected: Result<slog::Level>) {
         let result = get_log_level(input);
-        let msg = format!("expected: {:?}, result: {:?}", expected, result);
+        let msg = format!("expected: {expected:?}, result: {result:?}");
         assert_result!(expected, result, msg);
     }
 
@@ -1634,9 +1645,10 @@ Caused by:
     #[case("agent.cdh_api_timeout=600", Ok(time::Duration::from_secs(600)))]
     #[case("agent.image_pull_timeout=1200", Ok(time::Duration::from_secs(1200)))]
     #[case("agent.cdi_timeout=320", Ok(time::Duration::from_secs(320)))]
+    #[case("agent.launch_process_timeout=60", Ok(time::Duration::from_secs(60)))]
     fn test_timeout(#[case] param: &str, #[case] expected: Result<time::Duration>) {
         let result = get_timeout(param);
-        let msg = format!("expected: {:?}, result: {:?}", expected, result);
+        let msg = format!("expected: {expected:?}, result: {result:?}");
         assert_result!(expected, result, msg);
     }
 
@@ -1676,7 +1688,7 @@ Caused by:
     )))]
     fn test_get_container_pipe_size(#[case] param: &str, #[case] expected: Result<i32>) {
         let result = get_container_pipe_size(param);
-        let msg = format!("expected: {:?}, result: {:?}", expected, result);
+        let msg = format!("expected: {expected:?}, result: {result:?}");
         assert_result!(expected, result, msg);
     }
 
@@ -1697,7 +1709,7 @@ Caused by:
     #[case("x= = ", Ok(" = ".into()))]
     fn test_get_string_value(#[case] param: &str, #[case] expected: Result<String>) {
         let result = get_string_value(param);
-        let msg = format!("expected: {:?}, result: {:?}", expected, result);
+        let msg = format!("expected: {expected:?}, result: {result:?}");
         assert_result!(expected, result, msg);
     }
 
@@ -1716,7 +1728,7 @@ Caused by:
         #[case] expected: Result<GuestComponentsFeatures>,
     ) {
         let result = get_guest_components_features_value(input);
-        let msg = format!("expected: {:?}, result: {:?}", expected, result);
+        let msg = format!("expected: {expected:?}, result: {result:?}");
         assert_result!(expected, result, msg);
     }
 
@@ -1739,7 +1751,7 @@ Caused by:
         #[case] expected: Result<GuestComponentsProcs>,
     ) {
         let result = get_guest_components_procs_value(param);
-        let msg = format!("expected: {:?}, result: {:?}", expected, result);
+        let msg = format!("expected: {expected:?}, result: {result:?}");
         assert_result!(expected, result, msg);
     }
 

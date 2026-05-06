@@ -17,8 +17,8 @@ use std::{
 };
 
 use anyhow::{anyhow, Context};
+use hyper::StatusCode;
 use nix::sys::socket::{connect, socket, AddressFamily, SockFlag, SockType, VsockAddr};
-use reqwest::StatusCode;
 use slog::{debug, error, o};
 use vmm_sys_util::terminal::Terminal;
 
@@ -267,7 +267,7 @@ impl SockHandler for HvsockConfig {
             if msg.starts_with(CMD_OK) {
                 let response = msg
                     .strip_prefix(CMD_OK)
-                    .ok_or(format!("invalid response: {:?}", msg))
+                    .ok_or(format!("invalid response: {msg:?}"))
                     .map_err(|e| anyhow!(e))?
                     .trim();
                 debug!(sl!(), "Hybrid Vsock host-side port: {:?}", response);
